@@ -1,0 +1,14 @@
+*.iml
+.gradle/
+.idea/
+local.properties
+*.keystore
+*.jks
+/build/
+/app/build/
+*.apk
+*.aab
+.DS_Store
+captures/
+app/schemas/
+gradle/wrapper/gradle-wrapper.jar

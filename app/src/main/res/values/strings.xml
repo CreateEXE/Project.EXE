@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Project EXE</string>
+    <string name="subtitle">FAIT COMPANION SYSTEM</string>
+    <string name="status_permission_required">EXE needs permission to display over other apps so Fait can appear as a persistent overlay companion.</string>
+    <string name="status_permission_granted">Permission granted. Ready to launch Fait.</string>
+    <string name="status_launching">Starting Fait\u2026</string>
+    <string name="status_error">Failed to launch. Check logcat.</string>
+    <string name="btn_grant_permission">Grant Overlay Permission</string>
+    <string name="btn_launch">Launch Fait</string>
+</resources>
