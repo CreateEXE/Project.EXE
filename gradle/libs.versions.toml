@@ -1,7 +1,8 @@
 [versions]
 # Plugin versions — must be explicit for Gradle 9 strict mode
 agp                  = "8.8.0"
-kotlin               = "2.0.21"
+kotlin               = "2.1.0"
+ksp                  = "2.1.0-1.0.29"
 # Library versions
 kotlinxCoroutines    = "1.9.0"
 kotlinxSerialization = "1.7.3"
@@ -36,5 +37,4 @@ room-compiler                    = { group = "androidx.room",                nam
 android-application  = { id = "com.android.application",                  version.ref = "agp"    }
 kotlin-android       = { id = "org.jetbrains.kotlin.android",              version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-# kotlin-kapt is applied by id in app/build.gradle.kts — version tied to kotlin
-kotlin-kapt          = { id = "org.jetbrains.kotlin.kapt",                 version.ref = "kotlin" }
+ksp                  = { id = "com.google.devtools.ksp",                   version.ref = "ksp"    }
