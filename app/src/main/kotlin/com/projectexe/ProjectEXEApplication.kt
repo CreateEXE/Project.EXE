@@ -7,6 +7,7 @@ import android.util.Log
 import com.projectexe.ai.engine.EngineRouter
 import com.projectexe.ai.engine.OfflineEngine
 import com.projectexe.ai.engine.OnlineEngine
+import com.projectexe.ai.engine.local.LlamaCpp
 import com.projectexe.ai.soul.SoulHemisphere
 import com.projectexe.ai.tools.Tool
 import com.projectexe.ai.tools.ToolRegistry
@@ -58,13 +59,27 @@ class ProjectEXEApplication : Application() {
         ))
     }
 
+    /** One shared native llama.cpp instance — internally manages two slots. */
+    val llamaCpp: LlamaCpp by lazy { LlamaCpp(this) }
+
+    /**
+     * The router holds two pairs of engines (Persona + Factual), each pair
+     * having an online and an offline variant. Per-role engine mode is read
+     * from prefs at pick() time.
+     */
     val engineRouter: EngineRouter by lazy {
-        openRouterClient.applyOverrides(userPrefs.apiKeyOverride, userPrefs.modelOverride)
+        openRouterClient.applyOverrides(userPrefs.apiKeyOverride, userPrefs.modelOverride(UserPreferenceManager.Role.PERSONA))
         EngineRouter(
-            appCtx  = this,
-            online  = OnlineEngine(openRouterClient),
-            offline = OfflineEngine(this, userPrefs),
-            prefs   = userPrefs
+            appCtx = this,
+            prefs  = userPrefs,
+            onlinePersona  = OnlineEngine(openRouterClient,
+                modelOverride      = userPrefs.modelOverride(UserPreferenceManager.Role.PERSONA),
+                defaultTemperature = 0.80, defaultMaxTokens = 512),
+            onlineFactual  = OnlineEngine(openRouterClient,
+                modelOverride      = userPrefs.modelOverride(UserPreferenceManager.Role.FACTUAL),
+                defaultTemperature = 0.20, defaultMaxTokens = 700),
+            offlinePersona = OfflineEngine(this, userPrefs, UserPreferenceManager.Role.PERSONA, llamaCpp),
+            offlineFactual = OfflineEngine(this, userPrefs, UserPreferenceManager.Role.FACTUAL, llamaCpp)
         )
     }
 

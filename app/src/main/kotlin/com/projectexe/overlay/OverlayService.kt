@@ -68,7 +68,7 @@ class OverlayService : LifecycleService() {
             tools  = app.toolRegistry
         )
         maint = MemoryMaintenanceWorker(app.memoryDatabase.memoryDao(), lifecycleScope)
-        arb.loadCharacter(this, "fait.json")
+        arb.loadCharacter(this)
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ProjectEXE::Lock")
             .also { it.acquire(3600_000L) }
     }

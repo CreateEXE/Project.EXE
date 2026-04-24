@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.RadioGroup
@@ -22,18 +23,35 @@ import com.google.android.material.textfield.TextInputEditText
 import com.projectexe.ProjectEXEApplication
 import com.projectexe.R
 import com.projectexe.util.UserPreferenceManager
+import com.projectexe.util.UserPreferenceManager.Role
 
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var prefs: UserPreferenceManager
+    private lateinit var personaBlock: View
+    private lateinit var factualBlock: View
+
+    /** Currently-active role for the GGUF picker (set just before launching). */
+    private var pickingFor: Role = Role.PERSONA
 
     private val pickGguf = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            catch (_: SecurityException) { }
-            prefs.ggufUri = uri.toString()
-            prefs.ggufName = queryDisplayName(uri) ?: uri.lastPathSegment ?: "model.gguf"
-            findViewById<TextView>(R.id.text_gguf_status).text = prefs.ggufName
+            catch (_: SecurityException) {}
+            val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "model.gguf"
+            prefs.setGguf(pickingFor, uri.toString(), name)
+            blockFor(pickingFor).findViewById<TextView>(R.id.role_block_gguf_status).text = name
+        }
+    }
+
+    private val pickCard = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            catch (_: SecurityException) {}
+            val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "card.json"
+            prefs.characterCardUri  = uri.toString()
+            prefs.characterCardName = name
+            findViewById<TextView>(R.id.text_card_status).text = name
         }
     }
 
@@ -45,65 +63,106 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(R.layout.activity_settings)
         prefs = (application as ProjectEXEApplication).userPrefs
 
-        // Engine mode
-        val rg = findViewById<RadioGroup>(R.id.group_engine_mode)
-        when (prefs.engineMode) {
-            UserPreferenceManager.MODE_ONLINE  -> rg.check(R.id.rb_mode_online)
-            UserPreferenceManager.MODE_OFFLINE -> rg.check(R.id.rb_mode_offline)
-            else                               -> rg.check(R.id.rb_mode_auto)
-        }
+        personaBlock = findViewById(R.id.persona_block)
+        factualBlock = findViewById(R.id.factual_block)
 
-        // Online
-        findViewById<TextInputEditText>(R.id.edit_api_key).setText(prefs.apiKeyOverride)
-        findViewById<TextInputEditText>(R.id.edit_model).setText(prefs.modelOverride)
+        // Pipeline / tools toggles
+        findViewById<SwitchMaterial>(R.id.switch_dual).isChecked  = prefs.useDualPipeline
         findViewById<SwitchMaterial>(R.id.switch_tools).isChecked = prefs.toolsEnabled
 
-        // Offline
-        val ggufStatus = findViewById<TextView>(R.id.text_gguf_status)
-        ggufStatus.text = if (prefs.ggufUri.isNotEmpty()) prefs.ggufName.ifEmpty { "Model selected" }
-                          else getString(R.string.settings_gguf_none)
-        findViewById<Button>(R.id.btn_pick_gguf).setOnClickListener {
-            try { pickGguf.launch(arrayOf("*/*")) }
+        // Character card
+        val cardStatus = findViewById<TextView>(R.id.text_card_status)
+        cardStatus.text = if (prefs.characterCardUri.isNotEmpty())
+            prefs.characterCardName.ifEmpty { "Custom card" }
+        else getString(R.string.settings_card_none)
+        findViewById<Button>(R.id.btn_pick_card).setOnClickListener {
+            try { pickCard.launch(arrayOf("application/json", "*/*")) }
             catch (e: Exception) { Toast.makeText(this, "No file picker available.", Toast.LENGTH_SHORT).show() }
         }
-        val seek = findViewById<SeekBar>(R.id.seek_ctx)
-        val ctxText = findViewById<TextView>(R.id.text_ctx_value)
-        seek.progress = (prefs.ggufContextSize - 512).coerceAtLeast(0)
-        ctxText.text = prefs.ggufContextSize.toString()
-        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(s: SeekBar?, value: Int, fromUser: Boolean) {
-                val v = ((value + 512) / 256) * 256   // snap to multiples of 256
-                ctxText.text = v.toString()
-            }
-            override fun onStartTrackingTouch(s: SeekBar?) {}
-            override fun onStopTrackingTouch(s: SeekBar?) {}
-        })
+        findViewById<Button>(R.id.btn_clear_card).setOnClickListener {
+            prefs.characterCardUri = ""; prefs.characterCardName = ""
+            cardStatus.text = getString(R.string.settings_card_none)
+        }
+
+        // Shared API key
+        findViewById<TextInputEditText>(R.id.edit_api_key).setText(prefs.apiKeyOverride)
+
+        // Per-role blocks
+        bindRoleBlock(personaBlock, Role.PERSONA)
+        bindRoleBlock(factualBlock, Role.FACTUAL)
 
         // Permissions
         rebuildPermsList()
 
         // User
         findViewById<TextInputEditText>(R.id.edit_user_name).setText(prefs.userName)
-        val rg2 = findViewById<RadioGroup>(R.id.group_resp_len)
+        val rg = findViewById<RadioGroup>(R.id.group_resp_len)
         when (prefs.responseLengthPref) {
-            UserPreferenceManager.LEN_CONCISE  -> rg2.check(R.id.rb_len_concise)
-            UserPreferenceManager.LEN_DETAILED -> rg2.check(R.id.rb_len_detailed)
-            else                               -> rg2.check(R.id.rb_len_balanced)
+            UserPreferenceManager.LEN_CONCISE  -> rg.check(R.id.rb_len_concise)
+            UserPreferenceManager.LEN_DETAILED -> rg.check(R.id.rb_len_detailed)
+            else                               -> rg.check(R.id.rb_len_balanced)
         }
 
         findViewById<Button>(R.id.btn_save).setOnClickListener { save() }
     }
 
-    private fun save() {
-        prefs.engineMode = when (findViewById<RadioGroup>(R.id.group_engine_mode).checkedRadioButtonId) {
-            R.id.rb_mode_online  -> UserPreferenceManager.MODE_ONLINE
-            R.id.rb_mode_offline -> UserPreferenceManager.MODE_OFFLINE
-            else                 -> UserPreferenceManager.MODE_AUTO
+    private fun blockFor(role: Role) = if (role == Role.PERSONA) personaBlock else factualBlock
+
+    private fun bindRoleBlock(root: View, role: Role) {
+        // Mode
+        val rg = root.findViewById<RadioGroup>(R.id.role_block_mode)
+        when (prefs.engineMode(role)) {
+            UserPreferenceManager.MODE_ONLINE  -> rg.check(R.id.role_block_mode_online)
+            UserPreferenceManager.MODE_OFFLINE -> rg.check(R.id.role_block_mode_offline)
+            else                               -> rg.check(R.id.role_block_mode_auto)
         }
-        prefs.apiKeyOverride = findViewById<TextInputEditText>(R.id.edit_api_key).text?.toString().orEmpty()
-        prefs.modelOverride  = findViewById<TextInputEditText>(R.id.edit_model).text?.toString().orEmpty()
-        prefs.toolsEnabled   = findViewById<SwitchMaterial>(R.id.switch_tools).isChecked
-        prefs.ggufContextSize = findViewById<TextView>(R.id.text_ctx_value).text.toString().toIntOrNull() ?: 2048
+        // Model id
+        root.findViewById<TextInputEditText>(R.id.role_block_model).setText(prefs.modelOverride(role))
+        // GGUF picker
+        val ggufStatus = root.findViewById<TextView>(R.id.role_block_gguf_status)
+        ggufStatus.text = if (prefs.ggufUri(role).isNotEmpty())
+            prefs.ggufName(role).ifEmpty { "Model selected" }
+        else getString(R.string.settings_role_gguf_none)
+        root.findViewById<Button>(R.id.role_block_pick_gguf).setOnClickListener {
+            pickingFor = role
+            try { pickGguf.launch(arrayOf("*/*")) }
+            catch (_: Exception) { Toast.makeText(this, "No file picker available.", Toast.LENGTH_SHORT).show() }
+        }
+        // Context window
+        val seek = root.findViewById<SeekBar>(R.id.role_block_seek_ctx)
+        val ctxText = root.findViewById<TextView>(R.id.role_block_ctx_value)
+        seek.progress = (prefs.ggufContextSize(role) - 512).coerceAtLeast(0)
+        ctxText.text  = prefs.ggufContextSize(role).toString()
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, value: Int, fromUser: Boolean) {
+                val v = ((value + 512) / 256) * 256
+                ctxText.text = v.toString()
+            }
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) {}
+        })
+    }
+
+    private fun saveRoleBlock(root: View, role: Role) {
+        val mode = when (root.findViewById<RadioGroup>(R.id.role_block_mode).checkedRadioButtonId) {
+            R.id.role_block_mode_online  -> UserPreferenceManager.MODE_ONLINE
+            R.id.role_block_mode_offline -> UserPreferenceManager.MODE_OFFLINE
+            else                         -> UserPreferenceManager.MODE_AUTO
+        }
+        prefs.setEngineMode(role, mode)
+        prefs.setModelOverride(role, root.findViewById<TextInputEditText>(R.id.role_block_model).text?.toString().orEmpty())
+        val ctx = root.findViewById<TextView>(R.id.role_block_ctx_value).text.toString().toIntOrNull() ?: 2048
+        prefs.setGgufContextSize(role, ctx)
+    }
+
+    private fun save() {
+        prefs.useDualPipeline = findViewById<SwitchMaterial>(R.id.switch_dual).isChecked
+        prefs.toolsEnabled    = findViewById<SwitchMaterial>(R.id.switch_tools).isChecked
+        prefs.apiKeyOverride  = findViewById<TextInputEditText>(R.id.edit_api_key).text?.toString().orEmpty()
+
+        saveRoleBlock(personaBlock, Role.PERSONA)
+        saveRoleBlock(factualBlock, Role.FACTUAL)
+
         prefs.userName        = findViewById<TextInputEditText>(R.id.edit_user_name).text?.toString().orEmpty()
         prefs.responseLengthPref = when (findViewById<RadioGroup>(R.id.group_resp_len).checkedRadioButtonId) {
             R.id.rb_len_concise  -> UserPreferenceManager.LEN_CONCISE

@@ -4,26 +4,39 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
 
+/**
+ * All persisted user/runtime configuration. Two LLM "roles" are supported:
+ *   ROLE_PERSONA  - the in-character creative voice (smaller / faster).
+ *   ROLE_FACTUAL  - the analytical fact-check / augmentation voice (larger / accurate).
+ *
+ * Each role independently picks online (OpenRouter) or offline (local GGUF).
+ */
 class UserPreferenceManager(context: Context) {
+
+    enum class Role(val key: String, val slot: Int) {
+        PERSONA("persona", 0),
+        FACTUAL("factual", 1)
+    }
+
     companion object {
         private const val PREFS = "exe_user_prefs"
+        // user
         private const val KEY_NAME    = "user_name"
         private const val KEY_FIRST   = "first_run_complete"
         private const val KEY_LAST    = "last_session_ts"
         private const val KEY_VOICE   = "voice_input_enabled"
         private const val KEY_LEN     = "response_length"
-
-        // Engine / dual-LLM
-        private const val KEY_ENGINE_MODE  = "engine_mode"          // auto | online | offline
-        private const val KEY_API_KEY      = "openrouter_api_key"
-        private const val KEY_MODEL        = "openrouter_model"
+        // pipeline
+        private const val KEY_USE_PIPELINE = "use_dual_pipeline"
         private const val KEY_TOOLS_ON     = "tools_enabled"
-        private const val KEY_GGUF_URI     = "gguf_uri"
-        private const val KEY_GGUF_NAME    = "gguf_name"
-        private const val KEY_GGUF_CTX     = "gguf_ctx"
-        // Tool config
+        // weather
         private const val KEY_WX_LAT       = "weather_lat"
         private const val KEY_WX_LON       = "weather_lon"
+        // character card
+        private const val KEY_CARD_URI     = "character_card_uri"
+        private const val KEY_CARD_NAME    = "character_card_name"
+        // shared online key (one OpenRouter account, two model ids)
+        private const val KEY_API_KEY      = "openrouter_api_key"
 
         const val LEN_CONCISE  = "concise"
         const val LEN_BALANCED = "balanced"
@@ -36,6 +49,7 @@ class UserPreferenceManager(context: Context) {
 
     private val p: SharedPreferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    // ---------- user identity ----------
     var userName: String
         get() = p.getString(KEY_NAME, "") ?: ""
         set(v) = p.edit { putString(KEY_NAME, v.trim().take(32)) }
@@ -70,33 +84,48 @@ class UserPreferenceManager(context: Context) {
     var voiceInputEnabled: Boolean
         get() = p.getBoolean(KEY_VOICE, false); set(v) = p.edit { putBoolean(KEY_VOICE, v) }
 
-    // ---- Dual-LLM / engine ----
-    var engineMode: String
-        get() = p.getString(KEY_ENGINE_MODE, MODE_AUTO) ?: MODE_AUTO
-        set(v) { if (v in setOf(MODE_AUTO, MODE_ONLINE, MODE_OFFLINE)) p.edit { putString(KEY_ENGINE_MODE, v) } }
+    // ---------- pipeline / tools ----------
+    var useDualPipeline: Boolean
+        get() = p.getBoolean(KEY_USE_PIPELINE, true);  set(v) = p.edit { putBoolean(KEY_USE_PIPELINE, v) }
+    var toolsEnabled: Boolean
+        get() = p.getBoolean(KEY_TOOLS_ON, true);      set(v) = p.edit { putBoolean(KEY_TOOLS_ON, v) }
 
+    // ---------- shared OpenRouter API key ----------
     var apiKeyOverride: String
         get() = p.getString(KEY_API_KEY, "") ?: ""
         set(v) = p.edit { putString(KEY_API_KEY, v.trim()) }
 
-    var modelOverride: String
-        get() = p.getString(KEY_MODEL, "") ?: ""
-        set(v) = p.edit { putString(KEY_MODEL, v.trim()) }
+    // ---------- per-role config ----------
+    fun engineMode(r: Role): String =
+        p.getString("${r.key}_engine_mode", MODE_AUTO) ?: MODE_AUTO
+    fun setEngineMode(r: Role, v: String) {
+        if (v in setOf(MODE_AUTO, MODE_ONLINE, MODE_OFFLINE))
+            p.edit { putString("${r.key}_engine_mode", v) }
+    }
 
-    var toolsEnabled: Boolean
-        get() = p.getBoolean(KEY_TOOLS_ON, true); set(v) = p.edit { putBoolean(KEY_TOOLS_ON, v) }
+    fun modelOverride(r: Role): String = p.getString("${r.key}_model", "") ?: ""
+    fun setModelOverride(r: Role, v: String) = p.edit { putString("${r.key}_model", v.trim()) }
 
-    var ggufUri: String
-        get() = p.getString(KEY_GGUF_URI, "") ?: ""
-        set(v) = p.edit { putString(KEY_GGUF_URI, v) }
-    var ggufName: String
-        get() = p.getString(KEY_GGUF_NAME, "") ?: ""
-        set(v) = p.edit { putString(KEY_GGUF_NAME, v) }
-    var ggufContextSize: Int
-        get() = p.getInt(KEY_GGUF_CTX, 2048)
-        set(v) = p.edit { putInt(KEY_GGUF_CTX, v.coerceIn(512, 8192)) }
+    fun ggufUri(r: Role): String  = p.getString("${r.key}_gguf_uri", "") ?: ""
+    fun ggufName(r: Role): String = p.getString("${r.key}_gguf_name", "") ?: ""
+    fun setGguf(r: Role, uri: String, name: String) =
+        p.edit { putString("${r.key}_gguf_uri", uri); putString("${r.key}_gguf_name", name) }
+    fun clearGguf(r: Role) =
+        p.edit { remove("${r.key}_gguf_uri"); remove("${r.key}_gguf_name") }
 
-    // ---- Weather ----
+    fun ggufContextSize(r: Role): Int = p.getInt("${r.key}_gguf_ctx", 2048)
+    fun setGgufContextSize(r: Role, v: Int) =
+        p.edit { putInt("${r.key}_gguf_ctx", v.coerceIn(512, 8192)) }
+
+    // ---------- character card ----------
+    var characterCardUri: String
+        get() = p.getString(KEY_CARD_URI, "") ?: ""
+        set(v) = p.edit { putString(KEY_CARD_URI, v) }
+    var characterCardName: String
+        get() = p.getString(KEY_CARD_NAME, "") ?: ""
+        set(v) = p.edit { putString(KEY_CARD_NAME, v) }
+
+    // ---------- weather ----------
     var weatherLat: Float
         get() = p.getFloat(KEY_WX_LAT, Float.NaN); set(v) = p.edit { putFloat(KEY_WX_LAT, v) }
     var weatherLon: Float

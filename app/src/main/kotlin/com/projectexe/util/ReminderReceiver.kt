@@ -31,7 +31,7 @@ class ReminderReceiver : BroadcastReceiver() {
         try {
             nm.createNotificationChannel(NotificationChannel(
                 CHANNEL, "EXE Reminders", NotificationManager.IMPORTANCE_HIGH
-            ).apply { description = "Reminders set by Fait." })
+            ).apply { description = "Reminders set by your companion." })
         } catch (_: Exception) {}
 
         val tap = PendingIntent.getActivity(ctx, id,

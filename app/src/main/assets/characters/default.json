@@ -1,0 +1,14 @@
+{
+  "name": "Companion",
+  "version": "1.0",
+  "vrm_file": "",
+  "description": "Placeholder card. Upload your own JSON in Settings → Character card.",
+  "personality": "{character_personality}",
+  "scenario": "{character_scenario}",
+  "first_message": "Hi. I'm running on the placeholder card — upload a character card in Settings to give me a proper personality.",
+  "example_dialogue": [],
+  "expressions": ["neutral", "joy", "sadness", "anger", "surprise", "thinking"],
+  "animations":  ["idle", "wave", "nod", "shake", "thinking", "greeting"],
+  "creator": "Project EXE",
+  "tags": ["placeholder"]
+}

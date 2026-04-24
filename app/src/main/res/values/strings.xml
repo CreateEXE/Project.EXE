@@ -1,36 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Project EXE</string>
-    <string name="subtitle">FAIT COMPANION SYSTEM</string>
-    <string name="status_permission_required">EXE needs permission to display over other apps so Fait can appear as a persistent overlay companion.</string>
-    <string name="status_permission_granted">Permission granted. Ready to launch Fait.</string>
-    <string name="status_launching">Starting Fait\u2026</string>
+    <string name="subtitle">AI COMPANION SYSTEM</string>
+    <string name="status_permission_required">EXE needs permission to display over other apps so your companion can appear as a persistent overlay.</string>
+    <string name="status_permission_granted">Permission granted. Ready to launch.</string>
+    <string name="status_launching">Starting companion\u2026</string>
     <string name="status_error">Failed to launch. Check logcat.</string>
     <string name="btn_grant_permission">Grant Overlay Permission</string>
-    <string name="btn_launch">Launch Fait</string>
+    <string name="btn_launch">Launch Companion</string>
     <string name="btn_settings">Settings</string>
 
-    <!-- Settings -->
+    <!-- Settings root -->
     <string name="settings_title">Settings</string>
-    <string name="settings_engine_section">LLM Engine</string>
-    <string name="settings_engine_mode">Engine mode</string>
-    <string name="settings_engine_auto">Auto (online when available, offline otherwise)</string>
-    <string name="settings_engine_online">Online only (OpenRouter)</string>
-    <string name="settings_engine_offline">Offline only (local GGUF)</string>
 
-    <string name="settings_online_section">Online (OpenRouter)</string>
-    <string name="settings_api_key">OpenRouter API key</string>
-    <string name="settings_api_key_hint">sk-or-\u2026 (leave blank to use the build-time key)</string>
-    <string name="settings_model">Model id</string>
-    <string name="settings_model_hint">e.g. meta-llama/llama-3.1-8b-instruct:free</string>
+    <!-- Pipeline -->
+    <string name="settings_pipeline_section">Pipeline</string>
+    <string name="settings_use_dual">Use multi-stage Persona + Factual pipeline</string>
+    <string name="settings_use_dual_summary">Persona drafts → Factual checks → Persona expands → Factual verifies → Persona personifies. Slower, but more accurate and in-character.</string>
     <string name="settings_tools_enabled">Enable tool / function calling</string>
     <string name="settings_tools_summary">Lets the model check the weather, set reminders, send emails, etc. Online path only.</string>
 
-    <string name="settings_offline_section">Offline (local GGUF)</string>
-    <string name="settings_pick_gguf">Pick .gguf model file\u2026</string>
-    <string name="settings_gguf_none">No model selected</string>
-    <string name="settings_gguf_ctx">Context window (tokens)</string>
+    <!-- Character card -->
+    <string name="settings_card_section">Character card</string>
+    <string name="settings_card_pick">Upload character card (JSON)\u2026</string>
+    <string name="settings_card_none">No card uploaded — using built-in placeholder.</string>
+    <string name="settings_card_clear">Reset to placeholder</string>
 
+    <!-- Online (shared key) -->
+    <string name="settings_online_section">Online (OpenRouter)</string>
+    <string name="settings_api_key">OpenRouter API key</string>
+    <string name="settings_api_key_hint">sk-or-\u2026 (leave blank to use the build-time key)</string>
+
+    <!-- Per-role headers -->
+    <string name="settings_persona_section">Persona LLM (creative voice)</string>
+    <string name="settings_factual_section">Factual LLM (analyst / fact-checker)</string>
+
+    <!-- Per-role labels -->
+    <string name="settings_role_mode">Engine mode</string>
+    <string name="settings_engine_auto">Auto (online when available, offline otherwise)</string>
+    <string name="settings_engine_online">Online only</string>
+    <string name="settings_engine_offline">Offline only</string>
+    <string name="settings_role_model">Online model id</string>
+    <string name="settings_role_model_hint">e.g. meta-llama/llama-3.1-8b-instruct:free</string>
+    <string name="settings_role_pick_gguf">Pick .gguf file\u2026</string>
+    <string name="settings_role_gguf_none">No model selected</string>
+    <string name="settings_role_ctx">Context window (tokens)</string>
+
+    <!-- Permissions -->
     <string name="settings_tool_perms_section">Tool permissions</string>
     <string name="settings_perm_write_settings">Modify system settings (brightness, ringer)</string>
     <string name="settings_perm_calendar">Calendar (read &amp; create events)</string>
@@ -40,6 +56,7 @@
     <string name="settings_perm_request">Grant</string>
     <string name="settings_perm_granted">Granted</string>
 
+    <!-- User -->
     <string name="settings_user_section">You</string>
     <string name="settings_user_name">Your name</string>
     <string name="settings_response_length">Response length</string>
@@ -56,4 +73,5 @@
     <string name="focus_running">Focus session running</string>
     <string name="focus_done">Focus session complete</string>
     <string name="reminder_default_title">Reminder</string>
+    <string name="overlay_chat_hint">Type a message\u2026</string>
 </resources>

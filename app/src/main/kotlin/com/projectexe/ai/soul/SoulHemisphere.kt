@@ -24,7 +24,8 @@ class SoulHemisphere(private val memoryDao: MemoryDao, private val scope: Corout
         private const val DECAY  = 0.18f
     }
 
-    val personaName = "Fait"
+    /** Set by the Arbitrator whenever a character card is loaded. */
+    @Volatile var personaName: String = "Companion"
 
     private val _state = MutableStateFlow(EmotionalState.NEUTRAL)
     val currentEmotionalState: StateFlow<EmotionalState> = _state.asStateFlow()
@@ -88,12 +89,12 @@ class SoulHemisphere(private val memoryDao: MemoryDao, private val scope: Corout
     }
 
     private fun buildEmotionalHint() = when (_state.value.dominant) {
-        "joy"      -> "Fait feels joyful. Let warmth colour her words."
-        "sadness"  -> "Fait feels melancholic. She is reflective and gentle."
-        "anger"    -> "Fait is frustrated. Direct and terse, but not cruel."
-        "fear"     -> "Fait feels anxious. Careful and measured."
-        "surprise" -> "Fait is surprised. Animated and inquisitive."
-        "thinking" -> "Fait is in deep thought. Deliberate and exploratory."
+        "joy"      -> "$personaName feels joyful. Let warmth colour their words."
+        "sadness"  -> "$personaName feels melancholic — reflective and gentle."
+        "anger"    -> "$personaName is frustrated. Direct and terse, but not cruel."
+        "fear"     -> "$personaName feels anxious. Careful and measured."
+        "surprise" -> "$personaName is surprised. Animated and inquisitive."
+        "thinking" -> "$personaName is in deep thought. Deliberate and exploratory."
         else       -> ""
     }
 

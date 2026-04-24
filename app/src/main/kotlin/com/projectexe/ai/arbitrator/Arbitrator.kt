@@ -1,6 +1,7 @@
 package com.projectexe.ai.arbitrator
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import com.projectexe.BuildConfig
 import com.projectexe.ProjectEXEApplication
@@ -8,9 +9,9 @@ import com.projectexe.ai.auditor.AuditorHemisphere
 import com.projectexe.ai.engine.EngineResponse
 import com.projectexe.ai.engine.EngineRouter
 import com.projectexe.ai.engine.LlmEngine
+import com.projectexe.ai.pipeline.DualLlmPipeline
 import com.projectexe.ai.soul.EmotionalState
 import com.projectexe.ai.soul.SoulHemisphere
-import com.projectexe.ai.tools.ToolCall
 import com.projectexe.ai.tools.ToolDescriptor
 import com.projectexe.ai.tools.ToolRegistry
 import com.projectexe.api.ChatMessage
@@ -29,9 +30,19 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 
+/**
+ * Top-level conversation orchestrator. Holds chat history + character card,
+ * delegates generation to either:
+ *   • the multi-stage [DualLlmPipeline] (Persona + Factual), or
+ *   • a legacy single-shot single-engine path (when the user has disabled the
+ *     pipeline in Settings).
+ *
+ * Contains zero hardcoded character data — the character is supplied entirely
+ * by the loaded [CharacterCard].
+ */
 class Arbitrator(
     private val soul: SoulHemisphere,
-    private val client: OpenRouterClient,                       // legacy, kept for compatibility
+    private val client: OpenRouterClient,        // single-shot fallback path
     private val scope: CoroutineScope,
     private val router: EngineRouter? = null,
     private val tools: ToolRegistry?  = null
@@ -47,14 +58,29 @@ class Arbitrator(
     private val history = ArrayDeque<ChatMessage>()
     private var job: Job? = null
     private val auditor = AuditorHemisphere()
-    private var card: CharacterCard = CharacterCard.defaultCard()
+    private var card: CharacterCard = CharacterCard.placeholder()
 
-    fun loadCharacter(ctx: Context, file: String) {
-        CharacterCard.loadFromAssets(ctx, file)?.also { card = it; history.clear()
-            Log.i(TAG, "Loaded: ${it.name}") } ?: Log.w(TAG, "Failed to load $file")
+    init { soul.personaName = card.name }
+
+    fun loadCharacter(ctx: Context) {
+        val app = try { ProjectEXEApplication.instance } catch (_: Exception) { null }
+        // 1. user-uploaded card (Settings → Character card)
+        val uri = app?.userPrefs?.characterCardUri.orEmpty()
+        if (uri.isNotEmpty()) {
+            CharacterCard.loadFromUri(ctx, Uri.parse(uri))?.also { setCard(it); return }
+                ?: Log.w(TAG, "Could not load uploaded card at $uri — falling back.")
+        }
+        // 2. shipped placeholder
+        CharacterCard.loadFromAssets(ctx, "default.json")?.also { setCard(it) }
+            ?: setCard(CharacterCard.placeholder())
     }
 
-    fun activeVrmFile() = card.vrmFile
+    private fun setCard(c: CharacterCard) {
+        card = c; history.clear(); soul.personaName = c.name
+        Log.i(TAG, "Character loaded: ${c.name}")
+    }
+
+    fun activeVrmFile()       = card.vrmFile
     fun activeCharacterName() = card.name
 
     fun submitPrompt(userInput: String, isSystemEvent: Boolean = false) {
@@ -63,11 +89,13 @@ class Arbitrator(
     }
 
     private suspend fun pipeline(input: String, system: Boolean) {
-        _flow.emit(ArbitratorResult.thinking(soul.currentEmotionalState.value.lerp(EmotionalState.THINKING, 0.7f).normalise()))
+        _flow.emit(ArbitratorResult.thinking(soul.currentEmotionalState.value
+            .lerp(EmotionalState.THINKING, 0.7f).normalise()))
         try {
             val app: ProjectEXEApplication? = try { ProjectEXEApplication.instance } catch (_: Exception) { null }
-            val mem    = soul.buildMemoryContextBlock()
-            val sysPrompt = if (system) buildSysEvent(input, app, mem) else card.buildSystemPrompt(mem, app?.userPrefs?.userName ?: "")
+            val mem  = soul.buildMemoryContextBlock()
+            val name = app?.userPrefs?.userName ?: ""
+            val sysPrompt = if (system) buildSysEvent(input, app, mem) else card.buildSystemPrompt(mem, name)
             if (!system) history.addLast(ChatMessage(ChatRole.USER, input))
 
             val raw = generate(sysPrompt, system, input, app)
@@ -97,13 +125,32 @@ class Arbitrator(
         catch (e: Exception) { Log.e(TAG, "Pipeline error", e); emitError(e) }
     }
 
-    /** Run the engine router (with tool loop) or fall back to the legacy single-shot client. */
     private suspend fun generate(sysPrompt: String, system: Boolean, input: String, app: ProjectEXEApplication?): String {
-        val r = router
-        if (r == null) {
+        val r = router ?: run {
             val msgs = if (system) listOf(ChatMessage(ChatRole.USER, input)) else history.toList()
             return client.chatCompletion(sysPrompt, msgs, jsonMode = true)
         }
+        val useDual = app?.userPrefs?.useDualPipeline == true
+        // System events go through the single-shot path so the card's first_message
+        // / wake greeting still work as before — no need for a 5-stage greeting.
+        if (useDual && !system) return runDualPipeline(input, app)
+        return runSingleShot(r, sysPrompt, system, input, app)
+    }
+
+    private suspend fun runDualPipeline(input: String, app: ProjectEXEApplication?): String {
+        val pipeline = DualLlmPipeline(router!!, tools)
+        val ctx = soul.buildFullSystemPrompt()
+        val result = pipeline.run(card, input, ctx)
+        // P3 emits plain text — wrap into the JSON envelope the parser expects.
+        return jsonEnvelope(result.finalText)
+    }
+
+    private fun jsonEnvelope(text: String): String {
+        val esc = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        return "{\"text\":\"$esc\",\"expression\":\"neutral\",\"animation_trigger\":\"idle\"}"
+    }
+
+    private suspend fun runSingleShot(r: EngineRouter, sysPrompt: String, system: Boolean, input: String, app: ProjectEXEApplication?): String {
         val engine: LlmEngine = r.pick()
         val toolDescs: List<ToolDescriptor> =
             if (engine.id == "openrouter" && app?.userPrefs?.toolsEnabled == true) tools?.descriptors().orEmpty()
@@ -119,13 +166,12 @@ class Arbitrator(
                 is EngineResponse.Text -> return resp.content
                 is EngineResponse.ToolRequest -> {
                     if (tools == null || ++loops > MAX_TOOL_LOOPS) {
-                        return "{\"text\":\"I tried too many tools in a row. Let's try a simpler approach.\",\"expression\":\"thinking\",\"animation\":\"idle\"}"
+                        return "{\"text\":\"I tried too many tools. Let's try a simpler approach.\",\"expression\":\"thinking\",\"animation_trigger\":\"idle\"}"
                     }
                     convo.addLast(ChatMessage(ChatRole.ASSISTANT, resp.rawAssistantMessage))
                     for (call in resp.calls) {
                         val result = tools.execute(call)
                         Log.i(TAG, "Tool ${call.name}: ${result.userVisibleSummary ?: "(no summary)"}")
-                        // ChatRole.TOOL is encoded "id|content" (see OpenRouterClient.oneShot).
                         convo.addLast(ChatMessage(ChatRole.TOOL, "${call.id}|${result.asJsonString()}"))
                     }
                 }
@@ -136,11 +182,11 @@ class Arbitrator(
 
     private suspend fun buildSysEvent(key: String, app: ProjectEXEApplication?, mem: String?): String {
         val base = card.buildSystemPrompt(mem, app?.userPrefs?.userName ?: "")
+        val n   = app?.userPrefs?.userName?.takeIf { it.isNotEmpty() }?.let { " $it" } ?: ""
         val instr = when (key) {
-            "__SYSTEM_INIT__" -> "\n\nFirst ever conversation. Use the character's first_message. expression \"joy\", animation \"greeting\"."
+            "__SYSTEM_INIT__" -> "\n\nFirst ever conversation. Use the character's first_message. expression \"joy\", animation_trigger \"greeting\"."
             "__SYSTEM_WAKE__" -> {
                 val gap = app?.userPrefs?.getSessionGap() ?: SessionGap.TODAY
-                val n   = app?.userPrefs?.userName?.takeIf { it.isNotEmpty() }?.let { " $it" } ?: ""
                 "\n\n" + when (gap) {
                     SessionGap.RECENT       -> "Just resumed. 1-sentence casual welcome$n. neutral."
                     SessionGap.TODAY        -> "Resuming after a few hours. Warm greeting$n. joy."
@@ -164,7 +210,7 @@ class Arbitrator(
     }
 
     private suspend fun emitFallback() = _flow.emit(ArbitratorResult(
-        "Hmm, lost my train of thought. What were we saying?","thinking","idle",
+        "I lost my train of thought. What were we saying?","thinking","idle",
         EmotionalState.THINKING, false, true, 1f))
 
     private suspend fun emitError(e: Exception) = _flow.emit(ArbitratorResult(
