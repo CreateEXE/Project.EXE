@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Reusable per-role config block. Used twice in activity_settings.xml — once
+  for Persona and once for Factual. View IDs are unique because the parent
+  <include> tags assign distinct ids to the root.
+  Children are accessed via parent.findViewById(R.id.role_block_*).
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView android:text="@string/settings_role_mode"
+        android:textColor="@color/text_primary"
+        android:layout_marginTop="6dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <RadioGroup
+        android:id="@+id/role_block_mode"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+        <RadioButton android:id="@+id/role_block_mode_auto"
+            android:text="@string/settings_engine_auto"
+            android:textColor="@color/text_primary"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <RadioButton android:id="@+id/role_block_mode_online"
+            android:text="@string/settings_engine_online"
+            android:textColor="@color/text_primary"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <RadioButton android:id="@+id/role_block_mode_offline"
+            android:text="@string/settings_engine_offline"
+            android:textColor="@color/text_primary"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    </RadioGroup>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:hint="@string/settings_role_model">
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/role_block_model"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:inputType="text" android:textColor="@color/text_primary"/>
+    </com.google.android.material.textfield.TextInputLayout>
+    <TextView android:text="@string/settings_role_model_hint"
+        android:textColor="@color/text_secondary" android:textSize="11sp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/role_block_pick_gguf"
+        android:layout_width="match_parent" android:layout_height="48dp"
+        android:layout_marginTop="8dp"
+        android:text="@string/settings_role_pick_gguf"
+        app:backgroundTint="@color/accent_primary"
+        android:textColor="@color/background_dark"/>
+    <TextView android:id="@+id/role_block_gguf_status"
+        android:text="@string/settings_role_gguf_none"
+        android:textColor="@color/text_secondary" android:textSize="12sp"
+        android:layout_marginTop="6dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+    <TextView android:text="@string/settings_role_ctx"
+        android:textColor="@color/text_primary"
+        android:layout_marginTop="12dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <SeekBar android:id="@+id/role_block_seek_ctx"
+        android:max="7680" android:progress="1536"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    <TextView android:id="@+id/role_block_ctx_value"
+        android:text="2048" android:textColor="@color/text_secondary" android:textSize="11sp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+</LinearLayout>

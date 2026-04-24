@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_dark"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <!-- ============= Pipeline ============= -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_pipeline_section"/>
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switch_dual"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="@string/settings_use_dual"
+            android:textColor="@color/text_primary"/>
+        <TextView android:text="@string/settings_use_dual_summary"
+            android:textColor="@color/text_secondary" android:textSize="11sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switch_tools"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="@string/settings_tools_enabled"
+            android:textColor="@color/text_primary"
+            android:layout_marginTop="12dp"/>
+        <TextView android:text="@string/settings_tools_summary"
+            android:textColor="@color/text_secondary" android:textSize="11sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+        <!-- ============= Character card ============= -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_card_section"/>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_pick_card"
+            android:layout_width="match_parent" android:layout_height="48dp"
+            android:text="@string/settings_card_pick"
+            app:backgroundTint="@color/accent_primary"
+            android:textColor="@color/background_dark"/>
+        <TextView android:id="@+id/text_card_status"
+            android:text="@string/settings_card_none"
+            android:textColor="@color/text_secondary" android:textSize="12sp"
+            android:layout_marginTop="6dp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_clear_card"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/settings_card_clear"
+            style="@style/Widget.MaterialComponents.Button.TextButton"/>
+
+        <!-- ============= Online (shared API key) ============= -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_online_section"/>
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="@string/settings_api_key">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/edit_api_key"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:inputType="textPassword" android:textColor="@color/text_primary"/>
+        </com.google.android.material.textfield.TextInputLayout>
+        <TextView android:text="@string/settings_api_key_hint"
+            android:textColor="@color/text_secondary" android:textSize="11sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+        <!-- ============= Persona LLM slot ============= -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_persona_section"/>
+        <include layout="@layout/include_role_block"
+            android:id="@+id/persona_block"/>
+
+        <!-- ============= Factual LLM slot ============= -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_factual_section"/>
+        <include layout="@layout/include_role_block"
+            android:id="@+id/factual_block"/>
+
+        <!-- ============= Permissions ============= -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_tool_perms_section"/>
+        <LinearLayout android:id="@+id/perms_container"
+            android:orientation="vertical"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+        <!-- ============= You ============= -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_user_section"/>
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="@string/settings_user_name">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/edit_user_name"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:inputType="textPersonName" android:textColor="@color/text_primary"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView android:text="@string/settings_response_length"
+            android:textColor="@color/text_primary"
+            android:layout_marginTop="8dp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <RadioGroup android:id="@+id/group_resp_len"
+            android:orientation="horizontal"
+            android:layout_width="match_parent" android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/rb_len_concise"  android:text="@string/settings_response_concise"
+                android:textColor="@color/text_primary"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+            <RadioButton android:id="@+id/rb_len_balanced" android:text="@string/settings_response_balanced"
+                android:textColor="@color/text_primary"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"/>
+            <RadioButton android:id="@+id/rb_len_detailed" android:text="@string/settings_response_detailed"
+                android:textColor="@color/text_primary"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"/>
+        </RadioGroup>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_save"
+            android:layout_width="match_parent" android:layout_height="52dp"
+            android:layout_marginTop="24dp"
+            android:text="@string/settings_save"
+            app:backgroundTint="@color/accent_primary"
+            android:textColor="@color/background_dark"/>
+    </LinearLayout>
+</ScrollView>
