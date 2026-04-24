@@ -4,6 +4,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
@@ -12,6 +14,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.projectexe.overlay.OverlayService
+import com.projectexe.settings.SettingsActivity
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -19,6 +22,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var permBtn: Button
     private lateinit var launchBtn: Button
+    private lateinit var settingsBtn: Button
 
     private val permLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
@@ -27,14 +31,24 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         if (OverlayService.isRunning) { finish(); return }
         setContentView(R.layout.activity_main)
-        statusText = findViewById(R.id.text_status)
-        permBtn    = findViewById(R.id.btn_grant_permission)
-        launchBtn  = findViewById(R.id.btn_launch_overlay)
-        permBtn.setOnClickListener   { requestPerm() }
-        launchBtn.setOnClickListener { launchAndFinish() }
+        statusText  = findViewById(R.id.text_status)
+        permBtn     = findViewById(R.id.btn_grant_permission)
+        launchBtn   = findViewById(R.id.btn_launch_overlay)
+        settingsBtn = findViewById(R.id.btn_settings)
+        permBtn.setOnClickListener     { requestPerm() }
+        launchBtn.setOnClickListener   { launchAndFinish() }
+        settingsBtn.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
     }
 
     override fun onResume() { super.onResume(); refreshUI() }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.menu_main, menu); return true
+    }
+    override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
+        R.id.action_settings -> { startActivity(Intent(this, SettingsActivity::class.java)); true }
+        else -> super.onOptionsItemSelected(item)
+    }
 
     private fun refreshUI() {
         if (Settings.canDrawOverlays(this)) {

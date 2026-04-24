@@ -26,7 +26,21 @@ android {
 
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
 
+        externalNativeBuild {
+            cmake {
+                arguments += listOf("-DANDROID_STL=c++_shared", "-DEXE_BUILD_LLAMA=ON")
+                cppFlags  += listOf("-std=c++17", "-fexceptions", "-frtti")
+            }
+        }
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    externalNativeBuild {
+        cmake {
+            path    = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildTypes {

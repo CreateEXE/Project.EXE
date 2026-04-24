@@ -5,13 +5,18 @@ import android.util.Log
 import com.projectexe.BuildConfig
 import com.projectexe.ProjectEXEApplication
 import com.projectexe.ai.auditor.AuditorHemisphere
+import com.projectexe.ai.engine.EngineResponse
+import com.projectexe.ai.engine.EngineRouter
+import com.projectexe.ai.engine.LlmEngine
 import com.projectexe.ai.soul.EmotionalState
 import com.projectexe.ai.soul.SoulHemisphere
+import com.projectexe.ai.tools.ToolCall
+import com.projectexe.ai.tools.ToolDescriptor
+import com.projectexe.ai.tools.ToolRegistry
 import com.projectexe.api.ChatMessage
 import com.projectexe.api.ChatRole
 import com.projectexe.api.OpenRouterClient
 import com.projectexe.character.CharacterCard
-import com.projectexe.character.CharacterResponse
 import com.projectexe.character.CharacterResponseParser
 import com.projectexe.memory.MemoryType
 import com.projectexe.util.SessionGap
@@ -26,10 +31,15 @@ import kotlinx.coroutines.launch
 
 class Arbitrator(
     private val soul: SoulHemisphere,
-    private val client: OpenRouterClient,
-    private val scope: CoroutineScope
+    private val client: OpenRouterClient,                       // legacy, kept for compatibility
+    private val scope: CoroutineScope,
+    private val router: EngineRouter? = null,
+    private val tools: ToolRegistry?  = null
 ) {
-    companion object { private const val TAG = "EXE.Arbitrator" }
+    companion object {
+        private const val TAG = "EXE.Arbitrator"
+        private const val MAX_TOOL_LOOPS = 3
+    }
 
     private val _flow = MutableSharedFlow<ArbitratorResult>(replay=1, extraBufferCapacity=4, onBufferOverflow=BufferOverflow.DROP_OLDEST)
     val responseFlow: SharedFlow<ArbitratorResult> = _flow.asSharedFlow()
@@ -59,9 +69,8 @@ class Arbitrator(
             val mem    = soul.buildMemoryContextBlock()
             val sysPrompt = if (system) buildSysEvent(input, app, mem) else card.buildSystemPrompt(mem, app?.userPrefs?.userName ?: "")
             if (!system) history.addLast(ChatMessage(ChatRole.USER, input))
-            val msgs = if (system) listOf(ChatMessage(ChatRole.USER, input)) else history.toList()
 
-            val raw = client.chatCompletion(sysPrompt, msgs, jsonMode = true)
+            val raw = generate(sysPrompt, system, input, app)
             if (raw.isBlank()) { emitFallback(); return }
 
             val parsed = CharacterResponseParser.parse(raw, card.expressions, card.animations)
@@ -86,6 +95,43 @@ class Arbitrator(
             _flow.emit(ArbitratorResult(text, parsed.expression, parsed.animationTrigger, state, false, !audit.isBlocked, audit.confidence))
         } catch (e: kotlinx.coroutines.CancellationException) { throw e }
         catch (e: Exception) { Log.e(TAG, "Pipeline error", e); emitError(e) }
+    }
+
+    /** Run the engine router (with tool loop) or fall back to the legacy single-shot client. */
+    private suspend fun generate(sysPrompt: String, system: Boolean, input: String, app: ProjectEXEApplication?): String {
+        val r = router
+        if (r == null) {
+            val msgs = if (system) listOf(ChatMessage(ChatRole.USER, input)) else history.toList()
+            return client.chatCompletion(sysPrompt, msgs, jsonMode = true)
+        }
+        val engine: LlmEngine = r.pick()
+        val toolDescs: List<ToolDescriptor> =
+            if (engine.id == "openrouter" && app?.userPrefs?.toolsEnabled == true) tools?.descriptors().orEmpty()
+            else emptyList()
+
+        val convo = ArrayDeque<ChatMessage>().apply {
+            if (system) add(ChatMessage(ChatRole.USER, input)) else addAll(history)
+        }
+        var loops = 0
+        while (true) {
+            val resp = engine.chat(sysPrompt, convo.toList(), toolDescs, jsonMode = toolDescs.isEmpty())
+            when (resp) {
+                is EngineResponse.Text -> return resp.content
+                is EngineResponse.ToolRequest -> {
+                    if (tools == null || ++loops > MAX_TOOL_LOOPS) {
+                        return "{\"text\":\"I tried too many tools in a row. Let's try a simpler approach.\",\"expression\":\"thinking\",\"animation\":\"idle\"}"
+                    }
+                    convo.addLast(ChatMessage(ChatRole.ASSISTANT, resp.rawAssistantMessage))
+                    for (call in resp.calls) {
+                        val result = tools.execute(call)
+                        Log.i(TAG, "Tool ${call.name}: ${result.userVisibleSummary ?: "(no summary)"}")
+                        // ChatRole.TOOL is encoded "id|content" (see OpenRouterClient.oneShot).
+                        convo.addLast(ChatMessage(ChatRole.TOOL, "${call.id}|${result.asJsonString()}"))
+                    }
+                }
+            }
+        }
+        @Suppress("UNREACHABLE_CODE") return ""
     }
 
     private suspend fun buildSysEvent(key: String, app: ProjectEXEApplication?, mem: String?): String {
@@ -123,8 +169,10 @@ class Arbitrator(
 
     private suspend fun emitError(e: Exception) = _flow.emit(ArbitratorResult(
         when {
-            e.message?.contains("timeout",  true) == true -> "I took too long. Try again?"
-            e.message?.contains("401",      true) == true -> "API key issue — check your OpenRouter key."
+            e.message?.contains("ENGINE_UNAVAILABLE",    true) == true -> "My offline brain isn't compiled into this build yet."
+            e.message?.contains("NO_MODEL",              true) == true -> "Pick a local GGUF model in Settings first."
+            e.message?.contains("timeout",               true) == true -> "I took too long. Try again?"
+            e.message?.contains("401",                   true) == true -> "API key issue — check it in Settings."
             else -> "Something went wrong. Try again?"
         }, "neutral", "idle", EmotionalState.NEUTRAL, false, true, 1f))
 }

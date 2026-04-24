@@ -4,7 +4,21 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.util.Log
+import com.projectexe.ai.engine.EngineRouter
+import com.projectexe.ai.engine.OfflineEngine
+import com.projectexe.ai.engine.OnlineEngine
 import com.projectexe.ai.soul.SoulHemisphere
+import com.projectexe.ai.tools.Tool
+import com.projectexe.ai.tools.ToolRegistry
+import com.projectexe.ai.tools.impl.CalendarTool
+import com.projectexe.ai.tools.impl.ConnectivityTool
+import com.projectexe.ai.tools.impl.EmailTool
+import com.projectexe.ai.tools.impl.FocusTool
+import com.projectexe.ai.tools.impl.GuideTool
+import com.projectexe.ai.tools.impl.ReminderTool
+import com.projectexe.ai.tools.impl.SettingsTool
+import com.projectexe.ai.tools.impl.VirusScanTool
+import com.projectexe.ai.tools.impl.WeatherTool
 import com.projectexe.api.OpenRouterClient
 import com.projectexe.memory.MemoryDatabase
 import com.projectexe.util.UserPreferenceManager
@@ -28,6 +42,30 @@ class ProjectEXEApplication : Application() {
     val userPrefs: UserPreferenceManager  by lazy { UserPreferenceManager(this) }
     val soulHemisphere: SoulHemisphere    by lazy {
         SoulHemisphere(memoryDao = memoryDatabase.memoryDao(), scope = applicationScope)
+    }
+
+    val toolRegistry: ToolRegistry by lazy {
+        ToolRegistry(listOf<Tool>(
+            ConnectivityTool(this),
+            WeatherTool(this, userPrefs),
+            EmailTool(this),
+            CalendarTool(this),
+            ReminderTool(this),
+            FocusTool(this),
+            SettingsTool(this),
+            GuideTool(this),
+            VirusScanTool(this)
+        ))
+    }
+
+    val engineRouter: EngineRouter by lazy {
+        openRouterClient.applyOverrides(userPrefs.apiKeyOverride, userPrefs.modelOverride)
+        EngineRouter(
+            appCtx  = this,
+            online  = OnlineEngine(openRouterClient),
+            offline = OfflineEngine(this, userPrefs),
+            prefs   = userPrefs
+        )
     }
 
     override fun onCreate() {

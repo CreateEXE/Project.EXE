@@ -60,7 +60,13 @@ class OverlayService : LifecycleService() {
         wm = getSystemService(WindowManager::class.java)
         pm = getSystemService(PowerManager::class.java)
         val app = application as ProjectEXEApplication
-        arb   = Arbitrator(app.soulHemisphere, app.openRouterClient, lifecycleScope)
+        arb   = Arbitrator(
+            soul   = app.soulHemisphere,
+            client = app.openRouterClient,
+            scope  = lifecycleScope,
+            router = app.engineRouter,
+            tools  = app.toolRegistry
+        )
         maint = MemoryMaintenanceWorker(app.memoryDatabase.memoryDao(), lifecycleScope)
         arb.loadCharacter(this, "fait.json")
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ProjectEXE::Lock")
@@ -121,6 +127,10 @@ class OverlayService : LifecycleService() {
         }
         bridge = AnimationBridge(wv!!, lifecycleScope)
         bridge.onUserInputReceived = { arb.submitPrompt(it, false) }
+        bridge.onCloseRequested = {
+            try { startService(Intent(this, OverlayService::class.java).setAction(ACTION_STOP)) }
+            catch (_: Exception) { stopSelf() }
+        }
         wv!!.addJavascriptInterface(bridge, "EXEBridge")
         wv!!.loadUrl("file:///android_asset/web/vrm_renderer.html")
         wv!!.setOnTouchListener { v,e -> handleTouch(v,e) }

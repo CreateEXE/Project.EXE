@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_dark"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <!-- Engine -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_engine_section"/>
+        <RadioGroup
+            android:id="@+id/group_engine_mode"
+            android:layout_width="match_parent" android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/rb_mode_auto"    android:text="@string/settings_engine_auto"
+                android:textColor="@color/text_primary"
+                android:layout_width="match_parent" android:layout_height="wrap_content"/>
+            <RadioButton android:id="@+id/rb_mode_online"  android:text="@string/settings_engine_online"
+                android:textColor="@color/text_primary"
+                android:layout_width="match_parent" android:layout_height="wrap_content"/>
+            <RadioButton android:id="@+id/rb_mode_offline" android:text="@string/settings_engine_offline"
+                android:textColor="@color/text_primary"
+                android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        </RadioGroup>
+
+        <!-- Online -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_online_section"/>
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="@string/settings_api_key">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/edit_api_key"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:inputType="textPassword" android:textColor="@color/text_primary"/>
+        </com.google.android.material.textfield.TextInputLayout>
+        <TextView android:text="@string/settings_api_key_hint"
+            android:textColor="@color/text_secondary" android:textSize="11sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="@string/settings_model">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/edit_model"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:inputType="text" android:textColor="@color/text_primary"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switch_tools"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="@string/settings_tools_enabled"
+            android:textColor="@color/text_primary"
+            android:layout_marginTop="8dp"/>
+        <TextView android:text="@string/settings_tools_summary"
+            android:textColor="@color/text_secondary" android:textSize="11sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+        <!-- Offline -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_offline_section"/>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_pick_gguf"
+            android:layout_width="match_parent" android:layout_height="48dp"
+            android:text="@string/settings_pick_gguf"
+            app:backgroundTint="@color/accent_primary"
+            android:textColor="@color/background_dark"/>
+        <TextView android:id="@+id/text_gguf_status"
+            android:text="@string/settings_gguf_none"
+            android:textColor="@color/text_secondary" android:textSize="12sp"
+            android:layout_marginTop="6dp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:text="@string/settings_gguf_ctx"
+            android:textColor="@color/text_primary"
+            android:layout_marginTop="12dp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <SeekBar android:id="@+id/seek_ctx"
+            android:max="7680" android:progress="1536"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/text_ctx_value"
+            android:text="2048" android:textColor="@color/text_secondary" android:textSize="11sp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+
+        <!-- Tool permissions -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_tool_perms_section"/>
+        <LinearLayout android:id="@+id/perms_container"
+            android:orientation="vertical"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+        <!-- User -->
+        <TextView style="@style/EXE.SectionHeader" android:text="@string/settings_user_section"/>
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="@string/settings_user_name">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/edit_user_name"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:inputType="textPersonName" android:textColor="@color/text_primary"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView android:text="@string/settings_response_length"
+            android:textColor="@color/text_primary"
+            android:layout_marginTop="8dp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <RadioGroup android:id="@+id/group_resp_len"
+            android:orientation="horizontal"
+            android:layout_width="match_parent" android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/rb_len_concise"  android:text="@string/settings_response_concise"
+                android:textColor="@color/text_primary"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+            <RadioButton android:id="@+id/rb_len_balanced" android:text="@string/settings_response_balanced"
+                android:textColor="@color/text_primary"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"/>
+            <RadioButton android:id="@+id/rb_len_detailed" android:text="@string/settings_response_detailed"
+                android:textColor="@color/text_primary"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"/>
+        </RadioGroup>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_save"
+            android:layout_width="match_parent" android:layout_height="52dp"
+            android:layout_marginTop="24dp"
+            android:text="@string/settings_save"
+            app:backgroundTint="@color/accent_primary"
+            android:textColor="@color/background_dark"/>
+    </LinearLayout>
+</ScrollView>

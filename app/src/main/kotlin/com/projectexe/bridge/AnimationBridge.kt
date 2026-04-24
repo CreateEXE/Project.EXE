@@ -25,6 +25,7 @@ class AnimationBridge(private val webView: WebView, private val scope: Coroutine
     }
 
     var onUserInputReceived: ((String) -> Unit)? = null
+    var onCloseRequested:    (() -> Unit)?       = null
     @Volatile private var ready = false
 
     fun dispatchResponse(r: ArbitratorResult) {
@@ -60,6 +61,10 @@ class AnimationBridge(private val webView: WebView, private val scope: Coroutine
     @JavascriptInterface fun onRendererError(code: Int, msg: String) {
         Log.e(TAG, "Renderer error $code: $msg"); ready = false
         if (code == 1001) scope.launch(Dispatchers.Main) { delay(1500); webView.reload() }
+    }
+
+    @JavascriptInterface fun requestClose() {
+        scope.launch(Dispatchers.Main) { onCloseRequested?.invoke() }
     }
 
     @JavascriptInterface fun requestHaptic(ms: Int) {
