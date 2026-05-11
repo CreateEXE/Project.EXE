@@ -11,7 +11,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// ── Global state ─────────────────────────────────────────────────────────────
+// ── Global state ─────────────────────────────────────────────────────────
 static llama_model*   g_model   = nullptr;
 static llama_context* g_ctx     = nullptr;
 static llama_sampler* g_sampler = nullptr;
@@ -28,7 +28,7 @@ static std::string jstr(JNIEnv* env, jstring js) {
 
 extern "C" {
 
-// ── Load model ───────────────────────────────────────────────────────────────
+// ── Load model ──────────────────────────────────────────────────────────
 JNIEXPORT jboolean JNICALL
 Java_com_android_exe_ai_LlamaBridge_nativeLoad(
         JNIEnv* env, jobject /*thiz*/,
@@ -51,7 +51,8 @@ Java_com_android_exe_ai_LlamaBridge_nativeLoad(
     std::string path = jstr(env, modelPath);
     LOGI("Loading model: %s", path.c_str());
 
-    g_model = llama_load_model_from_file(path.c_str(), mparams);
+    // Use the updated API: llama_model_load_from_file
+    g_model = llama_model_load_from_file(path.c_str(), mparams);
     if (!g_model) {
         LOGE("Failed to load model from %s", path.c_str());
         return JNI_FALSE;
@@ -69,21 +70,32 @@ Java_com_android_exe_ai_LlamaBridge_nativeLoad(
         return JNI_FALSE;
     }
 
+    // Get the vocab from the model
+    const llama_vocab* vocab = llama_model_get_vocab(g_model);
+    if (!vocab) {
+        LOGE("Failed to get vocab");
+        llama_free(g_ctx);
+        llama_model_free(g_model);
+        g_ctx = nullptr;
+        g_model = nullptr;
+        return JNI_FALSE;
+    }
+
     // Build a greedy + repeat-penalty sampler chain
     g_sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(g_sampler, llama_sampler_init_repetition_penalty(
-            llama_n_vocab(g_model), /*last_n=*/64, /*penalty=*/1.1f,
+            llama_vocab_n_tokens(vocab), /*last_n=*/64, /*penalty=*/1.1f,
             /*freq_penalty=*/0.0f, /*presence_penalty=*/0.0f));
     llama_sampler_chain_add(g_sampler, llama_sampler_init_top_k(40));
     llama_sampler_chain_add(g_sampler, llama_sampler_init_top_p(0.95f, 1));
     llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(0.8f));
     llama_sampler_chain_add(g_sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
-    LOGI("Model loaded OK. Vocab=%d, n_ctx=%d", llama_n_vocab(g_model), nCtx);
+    LOGI("Model loaded OK. Vocab=%d, n_ctx=%d", llama_vocab_n_tokens(vocab), nCtx);
     return JNI_TRUE;
 }
 
-// ── Free model ───────────────────────────────────────────────────────────────
+// ── Free model ──────────────────────────────────────────────────────────
 JNIEXPORT void JNICALL
 Java_com_android_exe_ai_LlamaBridge_nativeFree(JNIEnv* /*env*/, jobject /*thiz*/)
 {
@@ -102,7 +114,7 @@ Java_com_android_exe_ai_LlamaBridge_nativeStop(JNIEnv* /*env*/, jobject /*thiz*/
     g_stop_generation = true;
 }
 
-// ── Stream inference ──────────────────────────────────────────────────────────
+// ── Stream inference ────────────────────────────────────────────────────────
 // Calls back tokenCallback(token: String) on the Java side for each generated token.
 JNIEXPORT jstring JNICALL
 Java_com_android_exe_ai_LlamaBridge_nativeInfer(
@@ -120,13 +132,25 @@ Java_com_android_exe_ai_LlamaBridge_nativeInfer(
     g_stop_generation = false;
     std::string prompt = jstr(env, jPrompt);
 
+    const llama_vocab* vocab = llama_model_get_vocab(g_model);
+    if (!vocab) {
+        LOGE("Failed to get vocab in inference");
+        return env->NewStringUTF("[ERROR: vocab not available]");
+    }
+
     // Tokenise the prompt
-    const int n_prompt_tokens = -llama_tokenize(
-            g_model, prompt.c_str(), (int32_t)prompt.size(),
+    // New API: llama_tokenize returns the number of tokens (positive value)
+    const int n_prompt_tokens = llama_tokenize(
+            vocab, prompt.c_str(), (int32_t)prompt.size(),
             nullptr, 0, /*add_special=*/true, /*parse_special=*/true);
 
+    if (n_prompt_tokens < 0) {
+        LOGE("Tokenize failed: negative token count");
+        return env->NewStringUTF("[ERROR: tokenize count]");
+    }
+
     std::vector<llama_token> prompt_tokens(n_prompt_tokens);
-    if (llama_tokenize(g_model, prompt.c_str(), (int32_t)prompt.size(),
+    if (llama_tokenize(vocab, prompt.c_str(), (int32_t)prompt.size(),
                        prompt_tokens.data(), (int32_t)prompt_tokens.size(),
                        true, true) < 0) {
         LOGE("Tokenize failed");
@@ -147,7 +171,7 @@ Java_com_android_exe_ai_LlamaBridge_nativeInfer(
 
     // Generation loop
     std::string full_response;
-    const llama_token eos = llama_token_eos(g_model);
+    const llama_token eos = llama_token_eos(vocab);
     int n_ctx_used = (int)prompt_tokens.size();
 
     for (int i = 0; i < maxNewTokens && !g_stop_generation; i++) {
@@ -157,7 +181,7 @@ Java_com_android_exe_ai_LlamaBridge_nativeInfer(
 
         // Decode token to text
         char buf[256];
-        int n = llama_token_to_piece(g_model, new_token, buf, sizeof(buf), 0, true);
+        int n = llama_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
         if (n < 0) break;
         buf[n] = '\0';
 
@@ -185,7 +209,8 @@ Java_com_android_exe_ai_LlamaBridge_nativeInfer(
         }
     }
 
-    llama_kv_cache_clear(g_ctx);
+    // Clear the KV cache for the next inference
+    llama_kv_cache_seq_rm(g_ctx, -1, -1, -1);
 
     return env->NewStringUTF(full_response.c_str());
 }
