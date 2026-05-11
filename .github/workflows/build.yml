@@ -44,14 +44,14 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK 26 and CMake 3.22
+      - name: Install NDK 25 and CMake 3.22
         run: |
           SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           echo "y" | "$SDKMANAGER" \
-            "ndk;26.3.11579264" \
+            "ndk;25.1.8937393" \
             "cmake;3.22.1"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
-          echo "NDK_VERSION=26.3.11579264" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.1.8937393" >> "$GITHUB_ENV"
+          echo "NDK_VERSION=25.1.8937393" >> "$GITHUB_ENV"
 
       - name: Accept licenses
         run: |
