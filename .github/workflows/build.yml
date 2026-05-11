@@ -5,98 +5,96 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  # Let you trigger a build manually from the GitHub website
   workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
 
-      # ── 1. Checkout your repo ───────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: false
 
-      # ── 2. Clone llama.cpp directly (no git submodule needed) ───────────────
-      #       Shallow clone keeps it fast (~1 min instead of 10).
       - name: Clone llama.cpp
         run: |
           git clone --depth=1 \
             https://github.com/ggml-org/llama.cpp \
             app/src/main/cpp/llama.cpp
-          echo "llama.cpp cloned: $(ls app/src/main/cpp/llama.cpp)"
+          echo "✓ llama.cpp: $(ls app/src/main/cpp/llama.cpp | head -5 | tr '\n' ' ')"
 
-      # ── 3. Java 17 ──────────────────────────────────────────────────────────
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
-      # ── 4. Android SDK + NDK + CMake ────────────────────────────────────────
+      - name: Set up Gradle 8.6
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.6'
+          cache-read-only: false
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK and CMake
+      - name: Install NDK 26 and CMake 3.22
         run: |
-          sdkmanager \
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          echo "y" | "$SDKMANAGER" \
             "ndk;26.3.11579264" \
-            "cmake;3.22.1" \
-            --sdk_root=$ANDROID_SDK_ROOT
-          echo "NDK_VERSION=26.3.11579264" >> $GITHUB_ENV
+            "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          echo "NDK_VERSION=26.3.11579264" >> "$GITHUB_ENV"
 
-      # ── 5. Accept all SDK licenses ──────────────────────────────────────────
       - name: Accept licenses
-        run: yes | sdkmanager --licenses --sdk_root=$ANDROID_SDK_ROOT || true
+        run: |
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses || true
 
-      # ── 6. Write local.properties ───────────────────────────────────────────
       - name: Write local.properties
         run: |
-          echo "sdk.dir=$ANDROID_SDK_ROOT"  >  local.properties
-          echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}" >> local.properties
+          cat > local.properties <<EOF
+          sdk.dir=$ANDROID_SDK_ROOT
+          ndk.dir=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION
+          EOF
 
-      # ── 7. Cache Gradle & build outputs ─────────────────────────────────────
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: ${{ runner.os }}-gradle-
-
-      # ── 8. Make gradlew executable ───────────────────────────────────────────
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
-      # ── 9. Build the debug APK ───────────────────────────────────────────────
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          gradle assembleDebug \
+            --stacktrace \
+            --info \
+            -Pandroid.suppressUnsupportedCompileSdk=36
         env:
-          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Xmx3g"
+          GRADLE_OPTS: >-
+            -Dorg.gradle.daemon=false
+            -Dorg.gradle.workers.max=2
+            -Xmx3500m
+            -Dkotlin.incremental=false
 
-      # ── 10. Upload APK so you can download it from the Actions tab ──────────
-      - name: Upload APK artifact
+      - name: Upload APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-exe-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: warn
           retention-days: 30
 
-      # ── 11. (Optional) Auto-create a GitHub Release on version tags ─────────
-      #        Tag your commit v1.0, v1.1 etc. from the GitHub website to
-      #        trigger this and get a downloadable release on your repo page.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: app/build/outputs/apk/debug/app-debug.apk
-          name: "Android.EXE ${{ github.ref_name }}"
+          name: "Project.EXE ${{ github.ref_name }}"
           body: |
-            Debug build of Android.EXE
-            Built automatically by GitHub Actions.
+            Debug APK — built automatically by GitHub Actions.
+            Install with "Install unknown apps" enabled for your browser.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
