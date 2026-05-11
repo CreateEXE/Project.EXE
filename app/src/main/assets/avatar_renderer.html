@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Avatar</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  canvas { display: block; width: 100% !important; height: 100% !important; }
+  #status {
+    position: fixed; bottom: 8px; left: 0; right: 0;
+    text-align: center; font-family: sans-serif; font-size: 11px;
+    color: rgba(255,255,255,0.7); pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  }
+</style>
+</head>
+<body>
+<div id="status">Loading…</div>
+
+<!--
+  All three.js + three-vrm loaded from jsDelivr CDN.
+  Works offline if the device has cached these; for fully offline use,
+  copy the .js files into assets/ and change the src paths to relative paths.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/",
+    "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.2/lib/three-vrm.module.min.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let renderer, camera, scene, controls, clock;
+let currentVRM = null;
+let currentMixer = null;          // for GLB animation clips
+let idleBlinkTimer = 0;
+let blinkState = 'open';          // open | closing | opening
+let blinkProgress = 0;
+let emoteQueue = [];              // queued {name, weight, duration}
+let activeEmotes = {};            // name → {weight, elapsed, duration}
+let breathPhase = 0;
+const BLINK_INTERVAL_MIN = 2.0;
+const BLINK_INTERVAL_MAX = 5.0;
+
+// ─── Init Three.js ────────────────────────────────────────────────────────────
+function init() {
+  renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: true,
+    premultipliedAlpha: false,
+  });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.setClearColor(0x000000, 0);   // transparent background
+  document.body.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  clock = new THREE.Clock();
+
+  camera = new THREE.PerspectiveCamera(
+    30, window.innerWidth / window.innerHeight, 0.01, 50
+  );
+  camera.position.set(0, 1.35, 2.8);   // good framing for a VRM waist-up shot
+
+  // Soft ambient + directional light – works well with MToon and PBR
+  const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambient);
+
+  const key = new THREE.DirectionalLight(0xfff4e0, 1.2);
+  key.position.set(1, 2, 2);
+  scene.add(key);
+
+  const fill = new THREE.DirectionalLight(0xc0d8ff, 0.4);
+  fill.position.set(-2, 1, -1);
+  scene.add(fill);
+
+  // OrbitControls – user can drag/zoom the avatar
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.target.set(0, 1.0, 0);
+  controls.minDistance = 0.5;
+  controls.maxDistance = 8.0;
+  controls.update();
+
+  window.addEventListener('resize', onResize);
+  animate();
+  setStatus('Ready – awaiting model');
+}
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// ─── Render loop ──────────────────────────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+
+  controls.update();
+
+  if (currentVRM) {
+    updateBlink(delta);
+    updateEmotes(delta);
+    updateBreath(delta);
+    currentVRM.update(delta);
+  }
+
+  if (currentMixer) currentMixer.update(delta);
+
+  renderer.render(scene, camera);
+}
+
+// ─── Idle blink ───────────────────────────────────────────────────────────────
+function updateBlink(delta) {
+  idleBlinkTimer -= delta;
+
+  if (blinkState === 'open' && idleBlinkTimer <= 0) {
+    blinkState = 'closing';
+    blinkProgress = 0;
+  }
+
+  if (blinkState === 'closing') {
+    blinkProgress = Math.min(blinkProgress + delta * 8, 1);
+    setBlinkWeight(blinkProgress);
+    if (blinkProgress >= 1) { blinkState = 'opening'; }
+  } else if (blinkState === 'opening') {
+    blinkProgress = Math.max(blinkProgress - delta * 6, 0);
+    setBlinkWeight(blinkProgress);
+    if (blinkProgress <= 0) {
+      blinkState = 'open';
+      idleBlinkTimer = BLINK_INTERVAL_MIN +
+        Math.random() * (BLINK_INTERVAL_MAX - BLINK_INTERVAL_MIN);
+    }
+  }
+}
+
+function setBlinkWeight(w) {
+  if (!currentVRM?.expressionManager) return;
+  try { currentVRM.expressionManager.setValue('blink', w); } catch(_){}
+  try { currentVRM.expressionManager.setValue('blinkLeft',  w); } catch(_){}
+  try { currentVRM.expressionManager.setValue('blinkRight', w); } catch(_){}
+}
+
+// ─── Expression emotes ────────────────────────────────────────────────────────
+function updateEmotes(delta) {
+  if (!currentVRM?.expressionManager) return;
+  for (const [name, state] of Object.entries(activeEmotes)) {
+    state.elapsed += delta;
+    // Fade in 0.3s → hold → fade out 0.4s
+    const fadeIn  = 0.3;
+    const fadeOut = 0.4;
+    let w;
+    if (state.elapsed < fadeIn) {
+      w = state.elapsed / fadeIn;
+    } else if (state.elapsed < state.duration - fadeOut) {
+      w = 1.0;
+    } else {
+      w = Math.max(0, (state.duration - state.elapsed) / fadeOut);
+    }
+    try { currentVRM.expressionManager.setValue(name, w * state.weight); } catch(_){}
+    if (state.elapsed >= state.duration) {
+      try { currentVRM.expressionManager.setValue(name, 0); } catch(_){}
+      delete activeEmotes[name];
+    }
+  }
+  currentVRM.expressionManager.update();
+}
+
+// ─── Subtle breathing (chest bone or spine) ───────────────────────────────────
+function updateBreath(delta) {
+  breathPhase += delta * 0.4;
+  const t = Math.sin(breathPhase * Math.PI * 2) * 0.012;
+  if (!currentVRM?.humanoid) return;
+  const chest = currentVRM.humanoid.getNormalizedBoneNode('chest') ||
+                currentVRM.humanoid.getNormalizedBoneNode('spine');
+  if (chest) {
+    chest.rotation.x = t;
+  }
+}
+
+// ─── Load VRM / GLB ───────────────────────────────────────────────────────────
+function loadModel(url) {
+  setStatus('Loading…');
+
+  // Remove old model
+  if (currentVRM) {
+    scene.remove(currentVRM.scene);
+    VRMUtils.deepDispose(currentVRM.scene);
+    currentVRM = null;
+  }
+  if (currentMixer) { currentMixer.stopAllAction(); currentMixer = null; }
+
+  const loader = new GLTFLoader();
+  loader.register(parser => new VRMLoaderPlugin(parser, { autoUpdateHumanBones: true }));
+
+  loader.load(
+    url,
+    (gltf) => {
+      const vrm = gltf.userData.vrm;
+
+      if (vrm) {
+        // ── VRM model ─────────────────────────────────────────────────────────
+        currentVRM = vrm;
+        VRMUtils.removeUnnecessaryVertices(vrm.scene);
+        VRMUtils.removeUnnecessaryJoints(vrm.scene);
+
+        // VRoid / VRM0 exports face the wrong way; flip them
+        if (vrm.meta?.metaVersion === '0') {
+          VRMUtils.rotateVRM0(vrm);
+        }
+
+        scene.add(vrm.scene);
+
+        // Auto-frame the camera on the model
+        autoFrame(vrm.scene);
+
+        // Reset blink timer
+        idleBlinkTimer = 1.5;
+
+        setStatus('');
+
+        // Notify Kotlin the model is ready
+        if (window.AndroidBridge) {
+          window.AndroidBridge.onModelLoaded(vrm.meta?.name || 'VRM model');
+        }
+      } else {
+        // ── Plain GLB / GLTF ─────────────────────────────────────────────────
+        const obj = gltf.scene;
+        scene.add(obj);
+        autoFrame(obj);
+
+        if (gltf.animations && gltf.animations.length > 0) {
+          currentMixer = new THREE.AnimationMixer(obj);
+          const clip = gltf.animations[0];
+          currentMixer.clipAction(clip).play();
+        }
+
+        setStatus('');
+
+        if (window.AndroidBridge) {
+          window.AndroidBridge.onModelLoaded('GLB model');
+        }
+      }
+    },
+    (progress) => {
+      const pct = Math.round(100 * progress.loaded / (progress.total || 1));
+      setStatus(`Loading… ${pct}%`);
+    },
+    (err) => {
+      console.error('Load error:', err);
+      setStatus('Load error: ' + (err.message || err));
+      if (window.AndroidBridge) {
+        window.AndroidBridge.onModelError(String(err));
+      }
+    }
+  );
+}
+
+// ─── Auto-frame camera ────────────────────────────────────────────────────────
+function autoFrame(object) {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  // Focus on upper body (head at ~80% of height)
+  const targetY = center.y + size.y * 0.15;
+  controls.target.set(center.x, targetY, center.z);
+
+  const dist = Math.max(size.x, size.y) * 1.4;
+  camera.position.set(center.x, targetY + size.y * 0.1, center.z + dist);
+  camera.near = dist / 100;
+  camera.far  = dist * 10;
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+// ─── Public API called from Kotlin via evaluateJavascript ────────────────────
+window.AvatarAPI = {
+
+  /** Load a model. url can be a data: URI, a file:// URI, or http */
+  loadModel(url) {
+    loadModel(url);
+  },
+
+  /** Play a named expression (VRM blendshape preset name, lowercase) */
+  playExpression(name, weight, durationSec) {
+    if (!currentVRM?.expressionManager) return;
+    activeEmotes[name] = { weight: weight || 1.0, duration: durationSec || 2.0, elapsed: 0 };
+  },
+
+  /** Move LookAt target (normalised screen coords -1..1) */
+  lookAt(x, y) {
+    if (!currentVRM?.lookAt) return;
+    currentVRM.lookAt.target = new THREE.Vector3(x * 2, 1.4 + y, -3);
+  },
+
+  /** Reset to neutral pose */
+  resetExpression() {
+    if (!currentVRM?.expressionManager) return;
+    activeEmotes = {};
+    const presets = ['happy','angry','sad','relaxed','surprised','aa','ih','ou','ee','oh'];
+    presets.forEach(p => {
+      try { currentVRM.expressionManager.setValue(p, 0); } catch(_){}
+    });
+  },
+
+  /** Pass in camera framing: bust / full / face */
+  setFraming(mode) {
+    if (!currentVRM) return;
+    const box = new THREE.Box3().setFromObject(currentVRM.scene);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    if (mode === 'face') {
+      controls.target.set(center.x, center.y + size.y * 0.35, center.z);
+      camera.position.set(center.x, center.y + size.y * 0.35, center.z + size.y * 0.6);
+    } else if (mode === 'full') {
+      controls.target.set(center.x, center.y, center.z);
+      camera.position.set(center.x, center.y + size.y * 0.1, center.z + size.y * 1.6);
+    } else {
+      autoFrame(currentVRM.scene);
+    }
+    controls.update();
+  }
+};
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+// Kick off
+init();
+</script>
+</body>
+</html>
