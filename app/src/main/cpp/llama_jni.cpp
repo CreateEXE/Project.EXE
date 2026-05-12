@@ -168,7 +168,7 @@ Java_com_android_exe_ai_LlamaBridge_nativeInfer(
 
     // Generation loop
     std::string full_response;
-    const llama_token eos = llama_token_eos(vocab);
+    const llama_token eos = llama_vocab_eos(vocab);
     int n_ctx_used = (int)prompt_tokens.size();
 
     for (int i = 0; i < maxNewTokens && !g_stop_generation; i++) {
@@ -207,7 +207,7 @@ Java_com_android_exe_ai_LlamaBridge_nativeInfer(
     }
 
     // Clear the KV cache for the next inference
-    llama_kv_cache_clear(g_ctx);
+    llama_kv_cache_seq_rm(g_ctx, -1, 0, -1);
 
     return env->NewStringUTF(full_response.c_str());
 }
