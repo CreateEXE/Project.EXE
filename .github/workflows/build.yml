@@ -27,7 +27,6 @@ jobs:
           git clone --depth=1 \
             https://github.com/ggml-org/llama.cpp \
             app/src/main/cpp/llama.cpp
-          echo "✓ llama.cpp: $(ls app/src/main/cpp/llama.cpp | head -5 | tr '\n' ' ')"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -44,33 +43,40 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK 25 and CMake 3.22
+      - name: Install NDK 26 and CMake 3.22
         run: |
           SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          echo "y" | "$SDKMANAGER" \
-            "ndk;25.1.8937393" \
-            "cmake;3.22.1"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.1.8937393" >> "$GITHUB_ENV"
-          echo "NDK_VERSION=25.1.8937393" >> "$GITHUB_ENV"
+          echo "y" | "$SDKMANAGER" "ndk;26.3.11579264" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          echo "NDK_VERSION=26.3.11579264" >> "$GITHUB_ENV"
 
       - name: Accept licenses
         run: |
-          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses || true
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+      - name: Bundle JS libraries into assets (offline renderer)
+        run: |
+          mkdir -p app/src/main/assets/js
+
+          # three.js r152 — UMD build, no importmap needed
+          curl -fsSL "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js" \
+            -o app/src/main/assets/js/three.min.js
+
+          # three-vrm 1.0.11 — last version with UMD build, handles VRM 0.x and 1.x
+          curl -fsSL "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@1.0.11/lib/three-vrm.js" \
+            -o app/src/main/assets/js/three-vrm.js
+
+          echo "JS assets bundled:"
+          ls -lh app/src/main/assets/js/
 
       - name: Write local.properties
         run: |
-          cat > local.properties <<EOF
-          sdk.dir=$ANDROID_SDK_ROOT
-          ndk.dir=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION
-          EOF
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> local.properties
 
       - name: Build debug APK
         run: |
-          gradle assembleDebug \
-            --stacktrace \
-            --info \
-            -Pandroid.suppressUnsupportedCompileSdk=36
+          gradle assembleDebug --stacktrace
         env:
           GRADLE_OPTS: >-
             -Dorg.gradle.daemon=false
@@ -82,7 +88,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-exe-debug
+          name: ProjectEXE-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: warn
           retention-days: 30
@@ -93,8 +99,5 @@ jobs:
         with:
           files: app/build/outputs/apk/debug/app-debug.apk
           name: "Project.EXE ${{ github.ref_name }}"
-          body: |
-            Debug APK — built automatically by GitHub Actions.
-            Install with "Install unknown apps" enabled for your browser.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
