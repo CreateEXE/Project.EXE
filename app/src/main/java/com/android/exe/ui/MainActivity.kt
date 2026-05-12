@@ -23,7 +23,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val db by lazy { PetDatabase.getInstance(this) }
 
-    // ── File pickers ──────────────────────────────────────────────────────────
+    // ── File pickers ────────────────────────────────────────────────────────
 
     private val pickAvatar = registerForActivityResult(
         ActivityResultContracts.GetContent()
@@ -48,7 +48,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    // ── Lifecycle ─────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,7 +66,7 @@ class MainActivity : AppCompatActivity() {
         refreshStatus()
     }
 
-    // ── Setup ──────────────────────────────────────────────────────────────────
+    // ── Setup ──────────────────────────────────────────────────────────
 
     private fun setupButtons() {
         binding.btnPickAvatar.setOnClickListener {
@@ -135,7 +135,7 @@ class MainActivity : AppCompatActivity() {
         overlayPermLauncher.launch(intent)
     }
 
-    // ── Service control ────────────────────────────────────────────────────────
+    // ── Service control ───────────────────────────────────────────────────────
 
     private fun startPetService() {
         val intent = Intent(this, PetForegroundService::class.java)
@@ -162,7 +162,7 @@ class MainActivity : AppCompatActivity() {
         return false  // TODO: track via bound service or shared pref
     }
 
-    // ── File handling ──────────────────────────────────────────────────────────
+    // ── File handling ───────────────────────────────────────────────────────
 
     private suspend fun handleAvatarPicked(uri: Uri) {
         binding.tvAvatarPath.text = "Copying…"
@@ -176,7 +176,7 @@ class MainActivity : AppCompatActivity() {
 
         // Signal running service to reload the avatar
         startService(Intent(this, PetForegroundService::class.java).apply {
-            action = PetForegroundService.ACTION_RELOAD
+            action = PetForegroundService.ACTION_RELOAD_AVATAR
         })
 
         Toast.makeText(this, "Avatar loaded!", Toast.LENGTH_SHORT).show()
