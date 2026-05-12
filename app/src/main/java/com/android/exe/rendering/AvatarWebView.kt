@@ -9,14 +9,6 @@ import android.webkit.*
 import com.android.exe.ai.PetEmotion
 import java.io.File
 
-/**
- * A WebView configured to render a VRM or GLB avatar via Three.js + @pixiv/three-vrm.
- * The HTML page is bundled in assets/avatar_renderer.html.
- *
- * Transparent background is achieved via:
- *   webView.setBackgroundColor(Color.TRANSPARENT)
- *   webView.background.alpha = 0
- */
 @SuppressLint("SetJavaScriptEnabled", "ViewConstructor")
 class AvatarWebView(context: Context) : WebView(context) {
 
@@ -25,56 +17,57 @@ class AvatarWebView(context: Context) : WebView(context) {
     }
 
     interface Listener {
+        fun onRendererReady()
         fun onModelLoaded(name: String)
         fun onModelError(error: String)
     }
 
     var listener: Listener? = null
+    private var pendingModelPath: String? = null
+    private var rendererReady = false
 
     init {
         settings.apply {
-            javaScriptEnabled        = true
-            domStorageEnabled        = true
-            allowFileAccess          = true
-            allowContentAccess       = true
-            mixedContentMode         = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            cacheMode                = WebSettings.LOAD_DEFAULT
+            javaScriptEnabled               = true
+            domStorageEnabled               = true
+            allowFileAccess                 = true
+            allowContentAccess              = true
+            // Allow file:// to load other file:// resources (assets)
+            @Suppress("DEPRECATION")
+            allowFileAccessFromFileURLs     = true
+            @Suppress("DEPRECATION")
+            allowUniversalAccessFromFileURLs = true
+            mixedContentMode                = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            cacheMode                       = WebSettings.LOAD_DEFAULT
             mediaPlaybackRequiresUserGesture = false
-            // Needed for importmap + ES modules
-            javaScriptCanOpenWindowsAutomatically = false
         }
 
-        // Transparent WebView background
         setBackgroundColor(0x00000000)
         background?.alpha = 0
 
-        // Inject the Kotlin ↔ JS bridge
         addJavascriptInterface(AndroidBridge(), "AndroidBridge")
 
         webViewClient = object : WebViewClient() {
             override fun onReceivedError(
                 view: WebView?, request: WebResourceRequest?, error: WebResourceError?
             ) {
-                Log.e(TAG, "WebView error: ${error?.description} for ${request?.url}")
+                Log.e(TAG, "WebView load error: ${error?.description} url=${request?.url}")
             }
 
-            override fun shouldOverrideUrlLoading(
-                view: WebView?, request: WebResourceRequest?
-            ): Boolean = false  // allow all navigation within the asset
-
-            override fun onReceivedHttpAuthRequest(
-                view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?
-            ) { handler?.cancel() }
+            override fun onPageFinished(view: WebView?, url: String?) {
+                // Page HTML loaded — JS init() runs via window.onload.
+                // Don't do anything here; wait for AndroidBridge.onRendererReady().
+                Log.d(TAG, "Page finished: $url")
+            }
         }
 
         webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
-                val level = msg?.messageLevel()
-                val text  = msg?.message() ?: return false
-                when (level) {
-                    ConsoleMessage.MessageLevel.ERROR -> Log.e(TAG, "JS: $text")
+                val text = msg?.message() ?: return false
+                when (msg.messageLevel()) {
+                    ConsoleMessage.MessageLevel.ERROR   -> Log.e(TAG, "JS: $text")
                     ConsoleMessage.MessageLevel.WARNING -> Log.w(TAG, "JS: $text")
-                    else -> Log.d(TAG, "JS: $text")
+                    else                               -> Log.d(TAG, "JS: $text")
                 }
                 return true
             }
@@ -83,9 +76,23 @@ class AvatarWebView(context: Context) : WebView(context) {
         loadUrl("file:///android_asset/avatar_renderer.html")
     }
 
-    // ─── JS bridge (Kotlin called from JS) ────────────────────────────────────
+    // ── JS → Kotlin bridge ────────────────────────────────────────────────────
 
     inner class AndroidBridge {
+        @JavascriptInterface
+        fun onRendererReady() {
+            Log.i(TAG, "Renderer ready")
+            post {
+                rendererReady = true
+                listener?.onRendererReady()
+                // Load any model that was queued before the renderer was ready
+                pendingModelPath?.let { path ->
+                    pendingModelPath = null
+                    loadModelFromPath(path)
+                }
+            }
+        }
+
         @JavascriptInterface
         fun onModelLoaded(name: String) {
             Log.i(TAG, "Model loaded: $name")
@@ -99,75 +106,75 @@ class AvatarWebView(context: Context) : WebView(context) {
         }
     }
 
-    // ─── Public API (Kotlin → JS) ─────────────────────────────────────────────
+    // ── Kotlin → JS ───────────────────────────────────────────────────────────
 
-    /**
-     * Load a VRM or GLB file from the given absolute path on device storage.
-     * The file bytes are base64-encoded and sent as a data: URI to avoid
-     * cross-origin file:// restrictions in the WebView.
-     */
     fun loadModelFromPath(path: String) {
+        if (!rendererReady) {
+            // Renderer not up yet — queue it
+            pendingModelPath = path
+            Log.d(TAG, "Model queued (renderer not ready): $path")
+            return
+        }
+
         val file = File(path)
         if (!file.exists()) {
-            Log.e(TAG, "Model file not found: $path")
+            Log.e(TAG, "File not found: $path")
             listener?.onModelError("File not found: $path")
             return
         }
 
-        // Determine mime type
         val mimeType = when {
-            path.endsWith(".vrm", ignoreCase = true) -> "model/gltf-binary"
-            path.endsWith(".glb", ignoreCase = true) -> "model/gltf-binary"
+            path.endsWith(".vrm",  ignoreCase = true) -> "model/gltf-binary"
+            path.endsWith(".glb",  ignoreCase = true) -> "model/gltf-binary"
             path.endsWith(".gltf", ignoreCase = true) -> "model/gltf+json"
             else -> "application/octet-stream"
         }
 
-        // Encode to base64 data URI (works for models up to ~50MB on modern Android)
-        val bytes   = file.readBytes()
-        val b64     = Base64.encodeToString(bytes, Base64.NO_WRAP)
-        val dataUri = "data:$mimeType;base64,$b64"
-
-        evaluateJavascript("AvatarAPI.loadModel('$dataUri');", null)
-        Log.i(TAG, "Sent model to JS (${bytes.size / 1024} KB)")
-    }
-
-    /** Load from a content:// Uri (e.g. from a file picker) */
-    fun loadModelFromUri(uri: Uri) {
-        try {
-            val bytes = context.contentResolver.openInputStream(uri)?.readBytes()
-                ?: run { listener?.onModelError("Cannot open Uri: $uri"); return }
-            val ext = when {
-                uri.path?.endsWith(".vrm", ignoreCase = true) == true -> "model/gltf-binary"
-                uri.path?.endsWith(".gltf", ignoreCase = true) == true -> "model/gltf+json"
-                else -> "model/gltf-binary"
+        Thread {
+            try {
+                val bytes = file.readBytes()
+                val b64   = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                val uri   = "data:$mimeType;base64,$b64"
+                post { evaluateJavascript("AvatarAPI.loadModel('$uri');", null) }
+                Log.i(TAG, "Sent model to JS: ${bytes.size / 1024} KB")
+            } catch (e: Exception) {
+                Log.e(TAG, "File read failed", e)
+                post { listener?.onModelError(e.message ?: "Read error") }
             }
-            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            evaluateJavascript("AvatarAPI.loadModel('data:$ext;base64,$b64');", null)
-        } catch (e: Exception) {
-            Log.e(TAG, "loadModelFromUri failed", e)
-            listener?.onModelError(e.message ?: "Unknown error")
-        }
+        }.start()
     }
 
-    /** Play a VRM expression by name. */
+    fun loadModelFromUri(uri: Uri) {
+        Thread {
+            try {
+                val bytes = context.contentResolver.openInputStream(uri)
+                    ?.readBytes()
+                    ?: run { post { listener?.onModelError("Cannot open Uri") }; return@Thread }
+                val mime = if (uri.path?.endsWith(".gltf", ignoreCase = true) == true)
+                    "model/gltf+json" else "model/gltf-binary"
+                val b64  = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                val data = "data:$mime;base64,$b64"
+                post {
+                    if (rendererReady) evaluateJavascript("AvatarAPI.loadModel('$data');", null)
+                    else pendingModelPath = null.also {
+                        evaluateJavascript("AvatarAPI.loadModel('$data');", null)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "loadModelFromUri failed", e)
+                post { listener?.onModelError(e.message ?: "Error") }
+            }
+        }.start()
+    }
+
     fun playExpression(emotion: PetEmotion) {
-        val js = "AvatarAPI.playExpression('${emotion.vrmExpression}', " +
-                 "${emotion.weight}, ${emotion.durationSec});"
-        evaluateJavascript(js, null)
+        evaluateJavascript(
+            "AvatarAPI.playExpression('${emotion.vrmExpression}',${emotion.weight},${emotion.durationSec});",
+            null
+        )
     }
 
-    /** Reset all expressions to neutral. */
-    fun resetExpression() {
-        evaluateJavascript("AvatarAPI.resetExpression();", null)
-    }
-
-    /** Point the avatar's gaze toward (x, y) in normalised coords (-1..1). */
-    fun lookAt(x: Float, y: Float) {
-        evaluateJavascript("AvatarAPI.lookAt($x, $y);", null)
-    }
-
-    /** Switch camera framing: "bust" | "face" | "full" */
-    fun setFraming(mode: String) {
-        evaluateJavascript("AvatarAPI.setFraming('$mode');", null)
-    }
+    fun resetExpression()        = evaluateJavascript("AvatarAPI.resetExpression();", null)
+    fun lookAt(x: Float, y: Float) = evaluateJavascript("AvatarAPI.lookAt($x,$y);", null)
+    fun setFraming(mode: String) = evaluateJavascript("AvatarAPI.setFraming('$mode');", null)
 }
