@@ -206,9 +206,6 @@ Java_com_android_exe_ai_LlamaBridge_nativeInfer(
         }
     }
 
-    // Clear the KV cache for the next inference
-    llama_kv_cache_clear(g_ctx);
-
     return env->NewStringUTF(full_response.c_str());
 }
 
