@@ -15,7 +15,13 @@
         android:fillColor="#FFFFFF"
         android:pathData="M38,38 L50,54 L38,70 L44,70 L54,57 L64,70 L70,70 L58,54 L70,38 L64,38 L54,51 L44,38 Z" />
 
-    <!-- Two small dots (eyes) -->
-    <circle android:fillColor="#0D0D0F" android:cx="46" android:cy="48" android:r="2.5" />
-    <circle android:fillColor="#0D0D0F" android:cx="62" android:cy="48" android:r="2.5" />
+    <!-- Left eye (small circle as path) -->
+    <path
+        android:fillColor="#0D0D0F"
+        android:pathData="M46,45.5 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+
+    <!-- Right eye (small circle as path) -->
+    <path
+        android:fillColor="#0D0D0F"
+        android:pathData="M62,45.5 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
 </vector>
