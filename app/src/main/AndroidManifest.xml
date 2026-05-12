@@ -2,7 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Overlay (draw over other apps) -->
+    <!-- CRITICAL: required for WebView to load any URL including file:// cross-origin -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Foreground service -->
@@ -12,23 +15,21 @@
     <!-- Boot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Wake lock to keep service alive -->
+    <!-- Wake lock -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Vibration for reactions -->
+    <!-- Vibration -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- Accessibility (screen context reading) -->
+    <!-- Accessibility -->
     <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- Storage for loading user files -->
+    <!-- Storage -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-
-    <!-- FileProvider for sharing temp copies of picked files -->
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
 
     <application
@@ -40,9 +41,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AndroidEXE"
         android:hardwareAccelerated="true"
+        android:usesCleartextTraffic="false"
         tools:targetApi="34">
 
-        <!-- Main setup activity -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
@@ -53,7 +54,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground service that hosts the overlay and LLM -->
         <service
             android:name=".service.PetForegroundService"
             android:exported="false"
@@ -63,7 +63,6 @@
                 android:value="AI avatar overlay companion" />
         </service>
 
-        <!-- Boot receiver -->
         <receiver
             android:name=".service.BootReceiver"
             android:exported="true">
@@ -73,7 +72,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- Accessibility service for screen context -->
         <service
             android:name=".accessibility.PetAccessibilityService"
             android:exported="true"
@@ -87,7 +85,6 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- FileProvider for uri-sharing picked VRM/GGUF files -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
