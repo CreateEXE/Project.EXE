@@ -63,7 +63,7 @@ Java_com_android_exe_ai_LlamaBridge_nativeLoad(
     cparams.n_threads = static_cast<uint32_t>(nThreads);
     cparams.n_threads_batch = static_cast<uint32_t>(nThreads);
 
-    g_ctx = llama_new_context_with_model(g_model, cparams);
+    g_ctx = llama_init_from_model(g_model, cparams);
     if (!g_ctx) {
         LOGE("Failed to create context");
         llama_model_free(g_model); g_model = nullptr;
@@ -81,11 +81,8 @@ Java_com_android_exe_ai_LlamaBridge_nativeLoad(
         return JNI_FALSE;
     }
 
-    // Build a greedy + repeat-penalty sampler chain
+    // Build a sampler chain
     g_sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler_chain_add(g_sampler, llama_sampler_init_repetition_penalty(
-            llama_vocab_n_tokens(vocab), /*last_n=*/64, /*penalty=*/1.1f,
-            /*freq_penalty=*/0.0f, /*presence_penalty=*/0.0f));
     llama_sampler_chain_add(g_sampler, llama_sampler_init_top_k(40));
     llama_sampler_chain_add(g_sampler, llama_sampler_init_top_p(0.95f, 1));
     llama_sampler_chain_add(g_sampler, llama_sampler_init_temp(0.8f));
@@ -210,7 +207,7 @@ Java_com_android_exe_ai_LlamaBridge_nativeInfer(
     }
 
     // Clear the KV cache for the next inference
-    llama_kv_cache_seq_rm(g_ctx, -1, -1, -1);
+    llama_kv_cache_clear(g_ctx);
 
     return env->NewStringUTF(full_response.c_str());
 }
