@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.AndroidEXE" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+    <style name="Theme.AndroidEXE" parent="Theme.MaterialComponents.Light.NoActionBar">
         <!-- Primary brand color -->
         <item name="colorPrimary">@color/primary</item>
         <item name="colorPrimaryVariant">@color/primary_variant</item>
