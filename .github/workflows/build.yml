@@ -52,16 +52,19 @@ jobs:
           echo "sdk.dir=$ANDROID_SDK_ROOT"                              >  local.properties
           echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}"   >> local.properties
 
-      # ── THIS IS THE NEW STEP ───────────────────────────────────────────────
-      # gradle-wrapper.jar is a binary that must exist for gradlew to boot.
-      # Rather than committing a binary to git, we download it from Gradle's
-      # own GitHub repo at the exact version pinned in gradle-wrapper.properties.
-      - name: Download gradle-wrapper.jar
+      # ── Download Gradle 8.6 from the official source and regenerate the
+      #    wrapper files (gradlew + gradle-wrapper.jar) in one shot.
+      #    This replaces the broken "curl the jar" approach entirely.
+      - name: Generate Gradle wrapper
         run: |
-          mkdir -p gradle/wrapper
-          curl -fsSL \
-            "https://github.com/gradle/gradle/raw/v8.6.0/gradle/wrapper/gradle-wrapper.jar" \
-            -o gradle/wrapper/gradle-wrapper.jar
+          wget -q https://services.gradle.org/distributions/gradle-8.6-bin.zip \
+               -O /tmp/gradle-8.6-bin.zip
+          unzip -q /tmp/gradle-8.6-bin.zip -d /tmp/gradle
+          /tmp/gradle/gradle-8.6/bin/gradle wrapper \
+            --gradle-version=8.6 \
+            --distribution-type=bin \
+            --project-dir=$GITHUB_WORKSPACE
+          chmod +x ./gradlew
           echo "Wrapper jar size: $(wc -c < gradle/wrapper/gradle-wrapper.jar) bytes"
 
       - name: Cache Gradle packages
@@ -72,9 +75,6 @@ jobs:
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: ${{ runner.os }}-gradle-
-
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
