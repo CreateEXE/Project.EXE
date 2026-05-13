@@ -1,32 +1,32 @@
-name: Build Debug APK
+name: Build APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
   workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
-    name: Assemble debug APK
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
-      # ── 1. Checkout (no submodules — we clone llama.cpp separately below) ──
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: false   # don't recurse; llama.cpp is a huge submodule
 
-      # ── 2. Clone llama.cpp (shallow, latest commit is fine) ───────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Clone llama.cpp
         run: |
           git clone --depth=1 \
             https://github.com/ggml-org/llama.cpp \
             app/src/main/cpp/llama.cpp
+          echo "llama.cpp cloned: $(ls app/src/main/cpp/llama.cpp | head -5)"
 
-      # ── 3. Java 17 ────────────────────────────────────────────────────────
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -34,86 +34,63 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # ── 4. Gradle 8.6 ─────────────────────────────────────────────────────
-      - name: Set up Gradle 8.6
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.6'
-
-      # ── 5. Android SDK + NDK 26 + CMake 3.22 ─────────────────────────────
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK 26 and CMake 3.22
+      - name: Install NDK and CMake
         run: |
-          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          echo "y" | "$SDKMANAGER" \
+          sdkmanager \
             "ndk;26.3.11579264" \
             "cmake;3.22.1" \
-            "build-tools;34.0.0" \
-            "platforms;android-34"
-          echo "NDK_VERSION=26.3.11579264" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
+            --sdk_root=$ANDROID_SDK_ROOT
+          echo "NDK_VERSION=26.3.11579264" >> $GITHUB_ENV
 
       - name: Accept licenses
+        run: yes | sdkmanager --licenses --sdk_root=$ANDROID_SDK_ROOT || true
+
+      - name: Write local.properties
         run: |
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+          echo "sdk.dir=$ANDROID_SDK_ROOT"                                >  local.properties
+          echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}"     >> local.properties
 
-      # ── 6. Bundle JS libraries via npm (reliable, no CDN 404s) ───────────
-      #
-      # FIX 1: three@0.152.2 + three.min.js  →  three@0.165.0 + three.module.js
-      #         UMD (three.min.js) was dropped after r151; the HTML uses ESM importmap
-      # FIX 2: @pixiv/three-vrm@1.0.11/lib/three-vrm.js  →  @pixiv/three-vrm@2.1.2/lib/three-vrm.module.min.js
-      #         v2 has breaking API changes; its bundle is the .module.min.js file
-      # FIX 3: GLTFLoader + OrbitControls were missing (README offline section requires all 4 files)
-      # FIX 4: Use `npm install` instead of curl so we get verified checksums, no CDN races
-      #
-      - name: Bundle JS libraries into assets (offline renderer)
-        run: |
-          mkdir -p app/src/main/assets/js
-
-          # Install packages into a temp node_modules (no package.json needed)
-          npm install --prefix /tmp/npm-js \
-            three@0.165.0 \
-            @pixiv/three-vrm@2.1.2
-
-          # three.js r165 ESM build  (used by importmap as "three")
-          cp /tmp/npm-js/node_modules/three/build/three.module.js \
-             app/src/main/assets/js/three.module.js
-
-          # three-vrm 2.1.2 ESM minified  (used by importmap as "@pixiv/three-vrm")
-          cp "/tmp/npm-js/node_modules/@pixiv/three-vrm/lib/three-vrm.module.min.js" \
-             app/src/main/assets/js/three-vrm.module.min.js
-
-          # GLTFLoader (needed by AvatarWebView to load .glb / .vrm files)
-          cp /tmp/npm-js/node_modules/three/examples/jsm/loaders/GLTFLoader.js \
-             app/src/main/assets/js/GLTFLoader.js
-
-          # OrbitControls (debug/dev camera; keep for parity with local setup)
-          cp /tmp/npm-js/node_modules/three/examples/jsm/controls/OrbitControls.js \
-             app/src/main/assets/js/OrbitControls.js
-
-          echo "JS assets bundled:"
-          ls -lh app/src/main/assets/js/
-
-      # ── 7. Build debug APK ────────────────────────────────────────────────
-      #
-      # FIX 5: This step was entirely MISSING from the original workflow.
-      #         The CI set up tools, failed on JS, and uploaded nothing.
-      #
-      - name: Build debug APK
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug \
-            -Pandroid.ndkVersion=26.3.11579264 \
-            --stacktrace \
-            --no-daemon
-
-      # ── 8. Upload APK artifact (downloadable from Actions tab) ────────────
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        if: always()   # upload even on partial failure so you can inspect what built
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
         with:
-          name: vrm-overlay-debug-${{ github.sha }}
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - name: Make gradlew executable
+        run: |
+          if [ ! -f "./gradlew" ]; then
+            echo "ERROR: gradlew not found. Commit it with: git add --chmod=+x gradlew"
+            exit 1
+          fi
+          chmod +x ./gradlew
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Xmx3g"
+
+      - name: Upload APK artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-exe-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/debug/app-debug.apk
+          name: "Android.EXE ${{ github.ref_name }}"
+          body: |
+            Debug build of Android.EXE
+            Built automatically by GitHub Actions.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
