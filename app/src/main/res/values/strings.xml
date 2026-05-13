@@ -1,8 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Android.EXE</string>
-    <string name="accessibility_label">Android.EXE Screen Reader</string>
-    <string name="accessibility_description">Reads screen context so your AI pet can react to what you\'re doing.</string>
-    <string name="notif_channel_pet">Pet Companion</string>
-    <string name="notif_channel_alert">Pet Reactions</string>
 </resources>
