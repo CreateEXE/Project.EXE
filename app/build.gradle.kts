@@ -7,6 +7,7 @@ plugins {
 android {
     namespace  = "com.android.exe"
     compileSdk = 35
+    ndkVersion = "26.1.10909125"
 
     defaultConfig {
         applicationId  = "com.android.exe"
