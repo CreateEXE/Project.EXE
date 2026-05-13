@@ -25,7 +25,6 @@ jobs:
           git clone --depth=1 \
             https://github.com/ggml-org/llama.cpp \
             app/src/main/cpp/llama.cpp
-          echo "llama.cpp cloned: $(ls app/src/main/cpp/llama.cpp | head -5)"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -50,8 +49,20 @@ jobs:
 
       - name: Write local.properties
         run: |
-          echo "sdk.dir=$ANDROID_SDK_ROOT"                                >  local.properties
-          echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}"     >> local.properties
+          echo "sdk.dir=$ANDROID_SDK_ROOT"                              >  local.properties
+          echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}"   >> local.properties
+
+      # ── THIS IS THE NEW STEP ───────────────────────────────────────────────
+      # gradle-wrapper.jar is a binary that must exist for gradlew to boot.
+      # Rather than committing a binary to git, we download it from Gradle's
+      # own GitHub repo at the exact version pinned in gradle-wrapper.properties.
+      - name: Download gradle-wrapper.jar
+        run: |
+          mkdir -p gradle/wrapper
+          curl -fsSL \
+            "https://github.com/gradle/gradle/raw/v8.6.0/gradle/wrapper/gradle-wrapper.jar" \
+            -o gradle/wrapper/gradle-wrapper.jar
+          echo "Wrapper jar size: $(wc -c < gradle/wrapper/gradle-wrapper.jar) bytes"
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
@@ -63,12 +74,7 @@ jobs:
           restore-keys: ${{ runner.os }}-gradle-
 
       - name: Make gradlew executable
-        run: |
-          if [ ! -f "./gradlew" ]; then
-            echo "ERROR: gradlew not found. Commit it with: git add --chmod=+x gradlew"
-            exit 1
-          fi
-          chmod +x ./gradlew
+        run: chmod +x ./gradlew
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
