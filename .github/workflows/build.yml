@@ -39,10 +39,10 @@ jobs:
       - name: Install NDK and CMake
         run: |
           sdkmanager \
-            "ndk;26.3.11579264" \
+            "ndk;26.1.10909125" \
             "cmake;3.22.1" \
             --sdk_root=$ANDROID_SDK_ROOT
-          echo "NDK_VERSION=26.3.11579264" >> $GITHUB_ENV
+          echo "NDK_VERSION=26.1.10909125" >> $GITHUB_ENV
 
       - name: Accept licenses
         run: yes | sdkmanager --licenses --sdk_root=$ANDROID_SDK_ROOT || true
@@ -52,9 +52,6 @@ jobs:
           echo "sdk.dir=$ANDROID_SDK_ROOT"                              >  local.properties
           echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}"   >> local.properties
 
-      # ── Download Gradle 8.6 from the official source and regenerate the
-      #    wrapper files (gradlew + gradle-wrapper.jar) in one shot.
-      #    This replaces the broken "curl the jar" approach entirely.
       - name: Generate Gradle wrapper
         run: |
           wget -q https://services.gradle.org/distributions/gradle-8.6-bin.zip \
