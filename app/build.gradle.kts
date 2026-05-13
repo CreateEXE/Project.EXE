@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace  = "com.android.exe"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId  = "com.android.exe"
@@ -21,23 +21,20 @@ android {
 
         externalNativeBuild {
             cmake {
-                cppFlags  += "-std=c++17"
+                cppFlags += "-std=c++17"
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
-                    "-DLLAMA_ANDROID=ON",
-                    "-DGGML_ANDROID=ON",
-                    "-DGGML_NEON=ON",
                     "-DGGML_OPENMP=OFF",
-                    "-DGGML_METAL=OFF",
                     "-DLLAMA_BUILD_TESTS=OFF",
-                    "-DLLAMA_BUILD_EXAMPLES=OFF"
+                    "-DLLAMA_BUILD_EXAMPLES=OFF",
+                    "-DLLAMA_BUILD_SERVER=OFF"
                 )
             }
         }
 
-        kapt {
-            arguments {
-                arg("room.schemaLocation", "$projectDir/schemas")
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += mapOf("room.schemaLocation" to "$projectDir/schemas")
             }
         }
     }
@@ -50,11 +47,6 @@ android {
     }
 
     buildTypes {
-        debug {
-            isDebuggable        = true
-            applicationIdSuffix = ".debug"
-            ndk { debugSymbolLevel = "FULL" }
-        }
         release {
             isMinifyEnabled = false
             proguardFiles(
@@ -62,10 +54,15 @@ android {
                 "proguard-rules.pro"
             )
         }
+        debug {
+            isDebuggable        = true
+            applicationIdSuffix = ".debug"
+        }
     }
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -75,28 +72,12 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-        freeCompilerArgs += listOf("-Xjvm-default=all")
-    }
-
-    lint {
-        disable += "ExpiredTargetSdkVersion"
     }
 
     packaging {
         resources {
-            excludes += setOf(
-                "/META-INF/{AL2.0,LGPL2.1}",
-                "META-INF/DEPENDENCIES"
-            )
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
-    }
-}
-
-kapt {
-    correctErrorTypes = true
-    useBuildCache     = true
-    javacOptions {
-        option("-Xmx1g")
     }
 }
 
@@ -107,8 +88,6 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
     implementation("androidx.lifecycle:lifecycle-service:2.8.3")
-    implementation("androidx.activity:activity-ktx:1.9.0")
-    implementation("androidx.fragment:fragment-ktx:1.8.1")
 
     val roomVersion = "2.6.1"
     implementation("androidx.room:room-runtime:$roomVersion")
@@ -117,5 +96,7 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+
     implementation("com.google.code.gson:gson:2.11.0")
+    implementation("androidx.activity:activity-ktx:1.9.0")
 }
