@@ -1,6 +1,9 @@
 package com.android.exe
 
+import android.util.Log
+
 object LlamaManager {
+    private const val TAG = "LlamaManager"
     
     external fun loadModel(modelPath: String): Boolean
     external fun inferenceNative(prompt: String, nPredict: Int): String
@@ -11,17 +14,17 @@ object LlamaManager {
         return try {
             inferenceNative(prompt, maxTokens)
         } catch (e: Exception) {
+            Log.e(TAG, "Inference error", e)
             "Error: ${e.message}"
         }
     }
 
-    companion object {
-        init {
-            try {
-                System.loadLibrary("llama")
-            } catch (e: UnsatisfiedLinkError) {
-                e.printStackTrace()
-            }
+    init {
+        try {
+            System.loadLibrary("llama")
+            Log.d(TAG, "Llama library loaded")
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "Failed to load llama library", e)
         }
     }
 }
