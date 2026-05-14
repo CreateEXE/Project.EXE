@@ -3,14 +3,167 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="@dimen/padding_medium">
 
-    <TextView
-        android:id="@+id/text_view"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Android.EXE"
-        android:textSize="24sp"
-        android:textStyle="bold" />
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- Pet Configuration Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Pet Configuration"
+                android:textSize="@dimen/text_size_headline_medium"
+                android:textStyle="bold"
+                android:layout_marginBottom="@dimen/margin_medium" />
+
+            <!-- Pet Name -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="@dimen/margin_medium">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Pet Name:"
+                    android:textSize="@dimen/text_size_body_medium" />
+
+                <TextView
+                    android:id="@+id/tvPetName"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Not set"
+                    android:textSize="@dimen/text_size_body_small"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginTop="@dimen/spacing_small" />
+
+                <Button
+                    android:id="@+id/btnPetName"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/button_height_small"
+                    android:text="Edit Pet Name"
+                    android:layout_marginTop="@dimen/spacing_small" />
+            </LinearLayout>
+
+            <!-- Avatar Selection -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="@dimen/margin_medium">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Avatar (.vrm/.glb/.gltf):"
+                    android:textSize="@dimen/text_size_body_medium" />
+
+                <TextView
+                    android:id="@+id/tvAvatarPath"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Not selected"
+                    android:textSize="@dimen/text_size_body_small"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginTop="@dimen/spacing_small"
+                    android:ellipsize="end"
+                    android:maxLines="2" />
+
+                <Button
+                    android:id="@+id/btnPickAvatar"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/button_height_small"
+                    android:text="Choose Avatar File"
+                    android:layout_marginTop="@dimen/spacing_small" />
+            </LinearLayout>
+
+            <!-- Model Selection -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="@dimen/margin_medium">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="GGUF Model:"
+                    android:textSize="@dimen/text_size_body_medium" />
+
+                <TextView
+                    android:id="@+id/tvModelPath"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Not selected"
+                    android:textSize="@dimen/text_size_body_small"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginTop="@dimen/spacing_small"
+                    android:ellipsize="end"
+                    android:maxLines="2" />
+
+                <Button
+                    android:id="@+id/btnPickModel"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/button_height_small"
+                    android:text="Choose GGUF Model"
+                    android:layout_marginTop="@dimen/spacing_small" />
+            </LinearLayout>
+
+            <!-- Permissions Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Permissions"
+                android:textSize="@dimen/text_size_headline_medium"
+                android:textStyle="bold"
+                android:layout_marginBottom="@dimen/margin_medium"
+                android:layout_marginTop="@dimen/margin_large" />
+
+            <Button
+                android:id="@+id/btnAccessibility"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/button_height_small"
+                android:text="Open Accessibility Settings"
+                android:layout_marginBottom="@dimen/margin_small" />
+
+            <!-- Status Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Overlay Status"
+                android:textSize="@dimen/text_size_headline_medium"
+                android:textStyle="bold"
+                android:layout_marginBottom="@dimen/margin_medium"
+                android:layout_marginTop="@dimen/margin_large" />
+
+            <TextView
+                android:id="@+id/tvOverlayStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Status: Not running"
+                android:textSize="@dimen/text_size_body_medium"
+                android:textColor="@color/text_secondary"
+                android:layout_marginBottom="@dimen/margin_medium" />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Control Button at Bottom -->
+    <Button
+        android:id="@+id/btnStartStop"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/button_height"
+        android:text="Start Pet"
+        android:textSize="@dimen/text_size_title_medium"
+        android:layout_margin="@dimen/margin_medium" />
 
 </LinearLayout>
