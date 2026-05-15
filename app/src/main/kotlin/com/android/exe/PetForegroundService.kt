@@ -156,16 +156,6 @@ class PetForegroundService : Service() {
                         Log.d(TAG, "JS Console [${consoleMessage?.messageLevel()}]: ${consoleMessage?.message()}")
                         return true
                     }
-
-                    override fun onJsError(
-                        view: WebView?,
-                        errorMessage: String?,
-                        lineNumber: Int,
-                        sourceID: String?
-                    ): Boolean {
-                        Log.e(TAG, "JS Error at $sourceID:$lineNumber - $errorMessage")
-                        return true
-                    }
                 }
             }
 
