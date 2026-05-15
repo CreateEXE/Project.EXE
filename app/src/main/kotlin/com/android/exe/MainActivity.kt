@@ -5,12 +5,20 @@ import android.util.Log
 import android.content.Intent
 import android.provider.Settings
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.ActivityResultLauncher
 import com.android.exe.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val TAG = "MainActivity"
+    
+    private lateinit var avatarFilePicker: ActivityResultLauncher<Intent>
+    private lateinit var modelFilePicker: ActivityResultLauncher<Intent>
+    
+    private var selectedAvatarUri: String = ""
+    private var selectedModelUri: String = ""
+    private var petName: String = "Fluffy"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,7 +33,11 @@ class MainActivity : AppCompatActivity() {
             // Set initial text
             if (::binding.isInitialized) {
                 binding.textView.text = "Android.EXE Ready"
+                binding.tvPetName.text = petName
             }
+            
+            // Register file pickers
+            setupFilePickers()
             
             // Initialize UI listeners
             setupListeners()
@@ -35,10 +47,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupFilePickers() {
+        // Avatar file picker
+        avatarFilePicker = FilePickerUtils.createAvatarFilePicker(this) { uri ->
+            if (uri != null) {
+                selectedAvatarUri = uri.toString()
+                val fileName = FilePickerUtils.getUriFileName(this, uri)
+                binding.tvAvatarPath.text = fileName
+                Log.d(TAG, "Avatar selected: $fileName")
+            }
+        }
+
+        // Model file picker
+        modelFilePicker = FilePickerUtils.createModelFilePicker(this) { uri ->
+            if (uri != null) {
+                selectedModelUri = uri.toString()
+                val fileName = FilePickerUtils.getUriFileName(this, uri)
+                binding.tvModelPath.text = fileName
+                Log.d(TAG, "Model selected: $fileName")
+            }
+        }
+    }
+
     private fun setupListeners() {
         try {
             binding.btnStartStop.setOnClickListener {
                 Log.d(TAG, "Start/Stop clicked")
+                if (selectedAvatarUri.isEmpty() || selectedModelUri.isEmpty()) {
+                    binding.textView.text = "Please select avatar and model first"
+                    return@setOnClickListener
+                }
                 binding.textView.text = "Pet service started!"
                 binding.tvOverlayStatus.text = "Status: Running"
                 startPetService()
@@ -46,12 +84,22 @@ class MainActivity : AppCompatActivity() {
 
             binding.btnPickAvatar.setOnClickListener {
                 Log.d(TAG, "Pick avatar clicked")
-                binding.tvAvatarPath.text = "Avatar selection not yet implemented"
+                try {
+                    avatarFilePicker.launch(FilePickerUtils.getAvatarPickerIntent())
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error launching avatar picker", e)
+                    binding.tvAvatarPath.text = "Error opening file picker"
+                }
             }
 
             binding.btnPickModel.setOnClickListener {
                 Log.d(TAG, "Pick model clicked")
-                binding.tvModelPath.text = "Model selection not yet implemented"
+                try {
+                    modelFilePicker.launch(FilePickerUtils.getModelPickerIntent())
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error launching model picker", e)
+                    binding.tvModelPath.text = "Error opening file picker"
+                }
             }
 
             binding.btnAccessibility.setOnClickListener {
@@ -65,7 +113,11 @@ class MainActivity : AppCompatActivity() {
 
             binding.btnPetName.setOnClickListener {
                 Log.d(TAG, "Edit pet name clicked")
-                binding.tvPetName.text = "Pet Name Editor (not implemented)"
+                PetNameDialog.show(this, petName) { newName ->
+                    petName = newName
+                    binding.tvPetName.text = newName
+                    Log.d(TAG, "Pet name changed to: $newName")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error setting up listeners", e)
@@ -74,10 +126,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun startPetService() {
         try {
-            // TODO: Start PetForegroundService or overlay manager
-            Log.d(TAG, "Pet service would be started here")
+            Log.d(TAG, "Starting pet service with avatar=$selectedAvatarUri, model=$selectedModelUri")
+            
+            // TODO: Implement PetForegroundService to show overlay
+            // For now just log
+            binding.textView.text = "Pet is running!\nAvatar: ${binding.tvAvatarPath.text}\nModel: ${binding.tvModelPath.text}"
         } catch (e: Exception) {
             Log.e(TAG, "Error starting pet service", e)
+            binding.textView.text = "Error: ${e.message}"
         }
     }
 
