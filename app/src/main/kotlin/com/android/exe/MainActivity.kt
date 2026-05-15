@@ -128,8 +128,18 @@ class MainActivity : AppCompatActivity() {
         try {
             Log.d(TAG, "Starting pet service with avatar=$selectedAvatarUri, model=$selectedModelUri")
             
-            // TODO: Implement PetForegroundService to show overlay
-            // For now just log
+            val serviceIntent = Intent(this, PetForegroundService::class.java).apply {
+                action = PetForegroundService.ACTION_START
+                putExtra(PetForegroundService.EXTRA_AVATAR_URI, selectedAvatarUri)
+                putExtra(PetForegroundService.EXTRA_MODEL_URI, selectedModelUri)
+            }
+            
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+            
             binding.textView.text = "Pet is running!\nAvatar: ${binding.tvAvatarPath.text}\nModel: ${binding.tvModelPath.text}"
         } catch (e: Exception) {
             Log.e(TAG, "Error starting pet service", e)
