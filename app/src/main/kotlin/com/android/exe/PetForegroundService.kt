@@ -13,11 +13,14 @@ import android.util.Log
 import android.view.LayoutInflater
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.Toast
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebChromeClient
 import android.net.Uri
 import androidx.core.app.NotificationCompat
+import java.io.File
+import java.io.FileOutputStream
 
 class PetForegroundService : Service() {
 
@@ -36,11 +39,13 @@ class PetForegroundService : Service() {
     private var webView: WebView? = null
     private var avatarUri: String = ""
     private var modelUri: String = ""
+    private var notificationManager: NotificationManager? = null
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created")
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
     }
 
@@ -49,11 +54,14 @@ class PetForegroundService : Service() {
 
         when (intent?.action) {
             ACTION_START -> {
-                avatarUri = intent.getStringExtra(EXTRA_AVATAR_URI) ?: ""
-                modelUri = intent.getStringExtra(EXTRA_MODEL_URI) ?: ""
+                avatarUri = intent?.getStringExtra(EXTRA_AVATAR_URI) ?: ""
+                modelUri = intent?.getStringExtra(EXTRA_MODEL_URI) ?: ""
                 Log.d(TAG, "Starting overlay with avatar=$avatarUri, model=$modelUri")
-                startOverlay()
+                
+                // MUST show notification immediately for foreground service
                 startForeground(NOTIFICATION_ID, createNotification())
+                
+                startOverlay()
             }
             ACTION_STOP -> {
                 Log.d(TAG, "Stopping overlay")
@@ -83,17 +91,29 @@ class PetForegroundService : Service() {
                     domStorageEnabled = true
                     databaseEnabled = true
                     mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    allowFileAccess = true
+                    allowContentAccess = true
                 }
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
-                        Log.d(TAG, "WebView page loaded")
+                        Log.d(TAG, "WebView page loaded: $url")
                         if (avatarUri.isNotEmpty()) {
                             loadAvatarIntoWebView(avatarUri)
                         }
                     }
+
+                    override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                        super.onReceivedError(view, request, error)
+                        Log.e(TAG, "WebView error: ${error?.description} for ${request?.url}")
+                    }
                 }
-                webChromeClient = WebChromeClient()
+                webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+                        Log.d(TAG, "WebView console: ${consoleMessage?.message()}")
+                        return true
+                    }
+                }
             }
 
             overlayView!!.addView(webView, FrameLayout.LayoutParams(
@@ -105,6 +125,7 @@ class PetForegroundService : Service() {
                 type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 } else {
+                    @Suppress("DEPRECATION")
                     WindowManager.LayoutParams.TYPE_PHONE
                 }
                 format = PixelFormat.TRANSLUCENT
@@ -121,26 +142,64 @@ class PetForegroundService : Service() {
             Log.d(TAG, "Overlay view added to window manager")
 
             // Load the avatar renderer HTML
-            webView?.loadUrl("file:///android_asset/avatar_renderer.html")
+            val htmlPath = "file:///android_asset/avatar_renderer.html"
+            Log.d(TAG, "Loading HTML from: $htmlPath")
+            webView?.loadUrl(htmlPath)
 
         } catch (e: Exception) {
             Log.e(TAG, "Error starting overlay", e)
+            e.printStackTrace()
         }
     }
 
     private fun loadAvatarIntoWebView(avatarUri: String) {
         try {
-            val contentUri = Uri.parse(avatarUri)
-            val js = "window.AvatarAPI.loadModel('$contentUri');"
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                webView?.evaluateJavascript(js) { result ->
-                    Log.d(TAG, "Avatar load result: $result")
+            Log.d(TAG, "Loading avatar: $avatarUri")
+            
+            val uri = Uri.parse(avatarUri)
+            val file = copyUriToTempFile(uri)
+            
+            if (file != null && file.exists()) {
+                val fileUri = "file://" + file.absolutePath
+                Log.d(TAG, "Avatar copied to: $fileUri")
+                
+                val js = "window.AvatarAPI.loadModel('$fileUri');"
+                Log.d(TAG, "Executing JS: $js")
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                    webView?.evaluateJavascript(js) { result ->
+                        Log.d(TAG, "Avatar load result: $result")
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    webView?.loadUrl("javascript:$js")
                 }
             } else {
-                webView?.loadUrl("javascript:$js")
+                Log.e(TAG, "Failed to copy avatar file to temp")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error loading avatar", e)
+            e.printStackTrace()
+        }
+    }
+
+    private fun copyUriToTempFile(uri: Uri): File? {
+        return try {
+            val cacheDir = cacheDir
+            val tempFile = File(cacheDir, "avatar_temp_${System.currentTimeMillis()}.vrm")
+            
+            contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            
+            Log.d(TAG, "File copied to cache: ${tempFile.absolutePath}")
+            tempFile
+        } catch (e: Exception) {
+            Log.e(TAG, "Error copying URI to temp file", e)
+            e.printStackTrace()
+            null
         }
     }
 
@@ -164,12 +223,23 @@ class PetForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val stopIntent = Intent(this, PetForegroundService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this, 1, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Android.EXE Pet")
             .setContentText("Your pet is running")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
+            .addAction(0, "Stop", stopPendingIntent)
             .setAutoCancel(false)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
     }
 
@@ -178,10 +248,14 @@ class PetForegroundService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Pet Service",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifications for the Android.EXE Pet service"
+                enableVibration(false)
+                enableLights(false)
+            }
+            notificationManager?.createNotificationChannel(channel)
+            Log.d(TAG, "Notification channel created")
         }
     }
 
