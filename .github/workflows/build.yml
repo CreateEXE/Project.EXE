@@ -112,21 +112,36 @@ jobs:
           echo "JS assets bundled:"
           ls -lh app/src/main/assets/js/
 
-      # ── 9. Build debug APK ────────────────────────────────────────────────
+      # ── 9. Regenerate gradle wrapper jar ──────────────────────────────────
       #
-      # FIX: This step was completely absent from the original workflow.
-      #      The CI set up every tool, failed on the JS step, and produced
-      #      no APK. assembleDebug is the actual build command.
+      # FIX: gradle/wrapper/gradle-wrapper.jar is a binary that is gitignored
+      #      (not committed to the repo). Without it ./gradlew crashes
+      #      immediately with "Could not find or load main class" (blank class
+      #      name) before Gradle even starts.
       #
+      #      setup-gradle@v4 already provisioned a full Gradle 8.6 installation.
+      #      We use that `gradle` binary to run `gradle wrapper`, which writes a
+      #      fresh verified gradle-wrapper.jar into gradle/wrapper/ in-place.
+      #      After this step ./gradlew works normally.
+      #
+      - name: Regenerate gradle wrapper jar
+        run: |
+          GRADLE_BIN=$(find /home/runner/work/_temp/.gradle-actions/gradle-installations/installs \
+            -name "gradle" -type f 2>/dev/null | head -1)
+          echo "Using gradle binary: $GRADLE_BIN"
+          "$GRADLE_BIN" wrapper --gradle-version 8.6 --distribution-type bin
+          chmod +x gradlew
+          ls -lh gradle/wrapper/gradle-wrapper.jar
+
+      # ── 10. Build debug APK ───────────────────────────────────────────────
       - name: Build debug APK
         run: |
-          chmod +x gradlew
           ./gradlew assembleDebug \
             -Pandroid.ndkVersion=26.3.11579264 \
             --stacktrace \
             --no-daemon
 
-      # ── 10. Upload APK artifact ───────────────────────────────────────────
+      # ── 11. Upload APK artifact ───────────────────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         if: always()
