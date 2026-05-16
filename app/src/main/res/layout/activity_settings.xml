@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="@dimen/padding_medium">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Default Settings"
+        android:textSize="@dimen/text_size_headline_large"
+        android:textStyle="bold"
+        android:layout_marginBottom="@dimen/margin_large" />
+
+    <!-- Avatar Section -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginBottom="@dimen/margin_large"
+        android:padding="@dimen/padding_medium"
+        android:background="@android:drawable/dialog_frame">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Default Avatar"
+            android:textSize="@dimen/text_size_title_large"
+            android:textStyle="bold"
+            android:layout_marginBottom="@dimen/margin_medium" />
+
+        <TextView
+            android:id="@+id/tvCurrentAvatar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Current: Not set"
+            android:textSize="@dimen/text_size_body_small"
+            android:textColor="@color/text_secondary"
+            android:layout_marginBottom="@dimen/margin_medium" />
+
+        <Button
+            android:id="@+id/btnChangeAvatar"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/button_height_small"
+            android:text="Select Avatar File"
+            android:layout_marginBottom="@dimen/spacing_small" />
+
+        <Button
+            android:id="@+id/btnClearAvatar"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/button_height_small"
+            android:text="Clear Avatar" />
+
+    </LinearLayout>
+
+    <!-- Model Section -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginBottom="@dimen/margin_large"
+        android:padding="@dimen/padding_medium"
+        android:background="@android:drawable/dialog_frame">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Default GGUF Model"
+            android:textSize="@dimen/text_size_title_large"
+            android:textStyle="bold"
+            android:layout_marginBottom="@dimen/margin_medium" />
+
+        <TextView
+            android:id="@+id/tvCurrentModel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Current: Not set"
+            android:textSize="@dimen/text_size_body_small"
+            android:textColor="@color/text_secondary"
+            android:layout_marginBottom="@dimen/margin_medium" />
+
+        <Button
+            android:id="@+id/btnChangeModel"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/button_height_small"
+            android:text="Select Model File"
+            android:layout_marginBottom="@dimen/spacing_small" />
+
+        <Button
+            android:id="@+id/btnClearModel"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/button_height_small"
+            android:text="Clear Model" />
+
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btnBack"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/button_height"
+        android:text="Back"
+        android:layout_marginTop="auto" />
+
+</LinearLayout>
