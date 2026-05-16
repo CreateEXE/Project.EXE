@@ -63,7 +63,7 @@ jobs:
       # ── 8. Bundle JS libraries into assets (offline renderer) ─────────────
       #
       # FIXES vs original workflow:
-      #   • three@0.152.2/build/three.min.js    → three@0.165.0  (version bump)
+      #   • three@0.152.2/build/three.min.js    → three@0.164.1  (version bump)
       #     three.min.js (UMD) was removed after r151; app uses ESM importmap,
       #     so the correct file is three.module.js
       #   • @pixiv/three-vrm@1.0.11/lib/three-vrm.js
@@ -75,18 +75,25 @@ jobs:
       #   • Use `npm install` instead of bare curl — verified checksums,
       #     no CDN 404 races; files come straight from npm registry
       #
+      # VERSION PIN RATIONALE:
+      #   @pixiv/three-vrm@2.1.2 declares peer: three@"^0.164.1"
+      #   Semver ^0.164.1 = >=0.164.1 <0.165.0, so three@0.165.0 is REJECTED
+      #   (that was the ERESOLVE error in the previous run).
+      #   Solution: pin three to 0.164.1 — the exact version three-vrm 2.1.2 tested against.
+      #
       - name: Bundle JS libraries into assets (offline renderer)
         run: |
           mkdir -p app/src/main/assets/js
 
           # Install both packages into a temp prefix (no package.json needed)
+          # three@0.164.1 satisfies @pixiv/three-vrm@2.1.2's peer dep ^0.164.1
           npm install --prefix /tmp/npm-js \
-            three@0.165.0 \
+            three@0.164.1 \
             @pixiv/three-vrm@2.1.2
 
           NPM=/tmp/npm-js/node_modules
 
-          # three.js r165 — ESM build (importmap "three" → this file)
+          # three.js r164 — ESM build (importmap "three" → this file)
           cp "$NPM/three/build/three.module.js" \
              app/src/main/assets/js/three.module.js
 
