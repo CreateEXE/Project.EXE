@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.util.Log
 import android.content.Intent
 import android.provider.Settings
+import android.net.Uri
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.ActivityResultLauncher
 import com.android.exe.databinding.ActivityMainBinding
@@ -24,22 +25,14 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         
         try {
-            // Initialize view binding
             binding = ActivityMainBinding.inflate(layoutInflater)
             setContentView(binding.root)
             
-            Log.d(TAG, "MainActivity created successfully")
+            Log.d(TAG, "MainActivity created")
+            binding.textView.text = "Android.EXE Ready"
             
-            // Set initial text
-            if (::binding.isInitialized) {
-                binding.textView.text = "Android.EXE Ready"
-                binding.tvPetName.text = petName
-            }
-            
-            // Register file pickers
+            loadSavedDefaults()
             setupFilePickers()
-            
-            // Initialize UI listeners
             setupListeners()
         } catch (e: Exception) {
             Log.e(TAG, "Error in onCreate", e)
@@ -47,24 +40,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun loadSavedDefaults() {
+        val defaultAvatarUri = PreferencesManager.getDefaultAvatarUri(this)
+        if (defaultAvatarUri != null) {
+            selectedAvatarUri = defaultAvatarUri
+            binding.tvAvatarPath.text = PreferencesManager.getDefaultAvatarName(this)
+            Log.d(TAG, "Loaded default avatar: $selectedAvatarUri")
+        }
+
+        val defaultModelUri = PreferencesManager.getDefaultModelUri(this)
+        if (defaultModelUri != null) {
+            selectedModelUri = defaultModelUri
+            binding.tvModelPath.text = PreferencesManager.getDefaultModelName(this)
+            Log.d(TAG, "Loaded default model: $selectedModelUri")
+        }
+
+        petName = PreferencesManager.getPetName(this)
+        binding.tvPetName.text = petName
+    }
+
     private fun setupFilePickers() {
-        // Avatar file picker
         avatarFilePicker = FilePickerUtils.createAvatarFilePicker(this) { uri ->
             if (uri != null) {
                 selectedAvatarUri = uri.toString()
                 val fileName = FilePickerUtils.getUriFileName(this, uri)
                 binding.tvAvatarPath.text = fileName
-                Log.d(TAG, "Avatar selected: $fileName")
+                PreferencesManager.saveDefaultAvatar(this, selectedAvatarUri, fileName)
+                Log.d(TAG, "Avatar selected and saved as default: $fileName")
             }
         }
 
-        // Model file picker
         modelFilePicker = FilePickerUtils.createModelFilePicker(this) { uri ->
             if (uri != null) {
                 selectedModelUri = uri.toString()
                 val fileName = FilePickerUtils.getUriFileName(this, uri)
                 binding.tvModelPath.text = fileName
-                Log.d(TAG, "Model selected: $fileName")
+                PreferencesManager.saveDefaultModel(this, selectedModelUri, fileName)
+                Log.d(TAG, "Model selected and saved as default: $fileName")
             }
         }
     }
@@ -116,8 +128,14 @@ class MainActivity : AppCompatActivity() {
                 PetNameDialog.show(this, petName) { newName ->
                     petName = newName
                     binding.tvPetName.text = newName
+                    PreferencesManager.savePetName(this, newName)
                     Log.d(TAG, "Pet name changed to: $newName")
                 }
+            }
+
+            binding.textView.setOnLongClickListener {
+                startActivity(Intent(this, SettingsActivity::class.java))
+                true
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error setting up listeners", e)
