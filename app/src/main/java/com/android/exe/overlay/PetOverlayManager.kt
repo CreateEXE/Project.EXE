@@ -4,10 +4,11 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.*
 import android.widget.*
-import androidx.core.view.isVisible
 import com.android.exe.ai.PetEmotion
 import com.android.exe.rendering.AvatarWebView
 import kotlinx.coroutines.*
@@ -25,6 +26,7 @@ class PetOverlayManager(private val context: Context) {
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
     private val density = context.resources.displayMetrics.density
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // ── Views ──────────────────────────────────────────────────────────────────
     private var overlayRoot: FrameLayout? = null
@@ -43,7 +45,25 @@ class PetOverlayManager(private val context: Context) {
 
     // ── Attach ─────────────────────────────────────────────────────────────────
 
+    /**
+     * Creates the overlay window and the AvatarWebView inside it.
+     *
+     * MUST run on the main thread — WebView's constructor calls
+     * new Handler(Looper.myLooper()) internally. If the calling thread has no
+     * Looper (e.g. a Service worker thread or a coroutine dispatcher),
+     * myLooper() returns null and Android throws:
+     *   "Attempt to read from field 'MessageQueue Looper.mQueue' on a null object"
+     *
+     * This method enforces the main-thread requirement by re-posting to
+     * mainHandler when called from any other thread.
+     */
     fun attach(avatarPath: String?) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            // Called from a background thread / coroutine — re-dispatch to main.
+            mainHandler.post { attach(avatarPath) }
+            return
+        }
+
         if (overlayRoot != null) return  // already attached
 
         val w = (OVERLAY_WIDTH_DP  * density).toInt()
@@ -70,7 +90,7 @@ class PetOverlayManager(private val context: Context) {
         val root = FrameLayout(context).also { overlayRoot = it }
         root.setBackgroundColor(Color.TRANSPARENT)
 
-        // Avatar WebView
+        // Avatar WebView — safe: we are guaranteed on main thread here
         val avw = AvatarWebView(context).also { avatarView = it }
         avw.setBackgroundColor(Color.TRANSPARENT)
         avw.background?.alpha = 0
@@ -108,7 +128,6 @@ class PetOverlayManager(private val context: Context) {
             context,
             object : GestureDetector.SimpleOnGestureListener() {
                 override fun onDoubleTap(e: MotionEvent): Boolean {
-                    // Double-tap cycles avatar size
                     cycleSizeMode()
                     return true
                 }
@@ -128,7 +147,7 @@ class PetOverlayManager(private val context: Context) {
                     val dy = (event.rawY - initialTouchY).toInt()
                     if (Math.abs(dx) > 10 || Math.abs(dy) > 10) dragging = true
                     if (dragging) {
-                        params!!.x = initialX - dx   // mirrored because Gravity.END
+                        params!!.x = initialX - dx
                         params!!.y = initialY - dy
                         try { wm.updateViewLayout(root, params) } catch (_: Exception) {}
                     }
@@ -143,7 +162,6 @@ class PetOverlayManager(private val context: Context) {
         wm.addView(root, params)
         Log.i(TAG, "Overlay attached")
 
-        // Load avatar if a path is known
         if (!avatarPath.isNullOrBlank()) {
             avw.loadModelFromPath(avatarPath)
         }
@@ -152,6 +170,11 @@ class PetOverlayManager(private val context: Context) {
     // ── Detach ─────────────────────────────────────────────────────────────────
 
     fun detach() {
+        // WindowManager operations must also be on main thread
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { detach() }
+            return
+        }
         overlayRoot?.let {
             try { wm.removeView(it) } catch (_: Exception) {}
         }
@@ -186,13 +209,13 @@ class PetOverlayManager(private val context: Context) {
 
     // ── Size cycling ───────────────────────────────────────────────────────────
 
-    private var sizeMode = 0   // 0 = normal, 1 = large, 2 = small
+    private var sizeMode = 0
 
     private fun cycleSizeMode() {
         sizeMode = (sizeMode + 1) % 3
         val (w, h) = when (sizeMode) {
-            1    -> Pair(240, 360)  // large
-            2    -> Pair(100, 150)  // small (tray mode)
+            1    -> Pair(240, 360)
+            2    -> Pair(100, 150)
             else -> Pair(OVERLAY_WIDTH_DP, OVERLAY_HEIGHT_DP)
         }
         params?.let { p ->
@@ -202,7 +225,6 @@ class PetOverlayManager(private val context: Context) {
                 try { wm.updateViewLayout(root, p) } catch (_: Exception) {}
             }
         }
-        // Tell JS to reframe the camera
         when (sizeMode) {
             1 -> avatarView?.setFraming("full")
             2 -> avatarView?.setFraming("face")
@@ -210,7 +232,7 @@ class PetOverlayManager(private val context: Context) {
         }
     }
 
-    // ── Avatar controls (delegated to AvatarWebView) ──────────────────────────
+    // ── Avatar controls ────────────────────────────────────────────────────────
 
     fun playExpression(emotion: PetEmotion) = avatarView?.playExpression(emotion)
     fun resetExpression()                   = avatarView?.resetExpression()
