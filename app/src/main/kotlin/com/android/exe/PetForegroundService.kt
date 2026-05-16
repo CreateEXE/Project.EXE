@@ -18,8 +18,10 @@ import android.webkit.WebViewClient
 import android.webkit.WebChromeClient
 import android.net.Uri
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Base64
 
 class PetForegroundService : Service() {
 
@@ -40,7 +42,6 @@ class PetForegroundService : Service() {
     private var avatarUri: String = ""
     private var modelUri: String = ""
     private var notificationManager: NotificationManager? = null
-    private var isRunning = false
 
     override fun onCreate() {
         super.onCreate()
@@ -53,8 +54,14 @@ class PetForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "onStartCommand action=${intent?.action}")
 
-        // Show notification immediately
-        startForeground(NOTIFICATION_ID, createNotification())
+        // CRITICAL: Show notification immediately for foreground service
+        try {
+            val notification = createNotification()
+            startForeground(NOTIFICATION_ID, notification)
+            Log.d(TAG, "Foreground service started with notification")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error showing notification", e)
+        }
 
         when (intent?.action) {
             ACTION_START -> {
@@ -64,17 +71,15 @@ class PetForegroundService : Service() {
                 
                 try {
                     startOverlay()
-                    isRunning = true
                 } catch (e: Exception) {
                     Log.e(TAG, "Fatal error in startOverlay", e)
-                    isRunning = false
+                    e.printStackTrace()
                     stopSelf()
                 }
             }
             ACTION_STOP -> {
                 Log.d(TAG, "STOP_ACTION")
                 stopOverlay()
-                isRunning = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -88,16 +93,15 @@ class PetForegroundService : Service() {
 
         try {
             if (overlayView != null) {
-                Log.w(TAG, "Overlay already running, skipping")
+                Log.w(TAG, "Overlay already running")
                 return
             }
 
-            // Create container
             overlayView = FrameLayout(this).apply {
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
             }
 
-            // Create status text view (fallback if WebView fails)
+            // Status text
             statusTextView = TextView(this).apply {
                 text = "Loading avatar..."
                 setTextColor(android.graphics.Color.WHITE)
@@ -110,10 +114,8 @@ class PetForegroundService : Service() {
                 FrameLayout.LayoutParams.WRAP_CONTENT
             ))
 
-            // Create WebView
+            // WebView
             webView = WebView(this).apply {
-                Log.d(TAG, "Creating WebView...")
-                
                 settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
@@ -121,39 +123,26 @@ class PetForegroundService : Service() {
                     allowFileAccess = true
                     allowContentAccess = true
                     mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                    setGeolocationEnabled(false)
-                    builtInZoomControls = false
-                    displayZoomControls = false
-                    setSupportMultipleWindows(false)
                 }
 
                 webViewClient = object : WebViewClient() {
-                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                        Log.d(TAG, "WebView onPageStarted: $url")
-                        updateStatus("Loading HTML...")
-                    }
-
                     override fun onPageFinished(view: WebView?, url: String?) {
-                        Log.d(TAG, "WebView onPageFinished: $url")
-                        updateStatus("HTML loaded, loading avatar...")
+                        Log.d(TAG, "HTML loaded: $url")
+                        updateStatus("HTML ready, loading avatar...")
                         if (avatarUri.isNotEmpty()) {
                             loadAvatarIntoWebView(avatarUri)
                         }
                     }
 
-                    override fun onReceivedError(
-                        view: WebView?,
-                        request: android.webkit.WebResourceRequest?,
-                        error: android.webkit.WebResourceError?
-                    ) {
-                        Log.e(TAG, "WebView error: ${error?.description} URL: ${request?.url}")
-                        updateStatus("WebView Error: ${error?.description}")
+                    override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                        Log.e(TAG, "WebView error: ${error?.description}")
+                        updateStatus("Error: ${error?.description}")
                     }
                 }
 
                 webChromeClient = object : WebChromeClient() {
                     override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
-                        Log.d(TAG, "JS Console [${consoleMessage?.messageLevel()}]: ${consoleMessage?.message()}")
+                        Log.d(TAG, "JS: ${consoleMessage?.message()}")
                         return true
                     }
                 }
@@ -164,7 +153,6 @@ class PetForegroundService : Service() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             ))
 
-            // Add to window manager
             val params = WindowManager.LayoutParams().apply {
                 type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -175,23 +163,19 @@ class PetForegroundService : Service() {
                 format = PixelFormat.TRANSLUCENT
                 flags = (WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED)
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
                 width = WindowManager.LayoutParams.MATCH_PARENT
                 height = WindowManager.LayoutParams.MATCH_PARENT
-                x = 0
-                y = 0
             }
 
             windowManager?.addView(overlayView, params)
-            Log.d(TAG, "Overlay added to window manager successfully")
+            Log.d(TAG, "Overlay added to window")
 
-            // Load HTML
             updateStatus("Loading renderer...")
             webView?.loadUrl("file:///android_asset/avatar_renderer.html")
 
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in startOverlay", e)
+            Log.e(TAG, "Error in startOverlay", e)
             e.printStackTrace()
             updateStatus("Error: ${e.message}")
         }
@@ -205,21 +189,31 @@ class PetForegroundService : Service() {
             val cacheFile = copyUriToCache(uri)
             
             if (cacheFile == null) {
-                updateStatus("Error: Cannot access avatar file")
-                Log.e(TAG, "Failed to copy avatar to cache")
+                updateStatus("Error: Cannot read avatar file")
                 return
             }
 
-            val fileUri = Uri.fromFile(cacheFile).toString()
-            Log.d(TAG, "Avatar at: $fileUri")
-            updateStatus("Avatar ready: ${cacheFile.name}")
+            Log.d(TAG, "Avatar file: ${cacheFile.absolutePath} (${cacheFile.length()} bytes)")
+            updateStatus("Rendering avatar...")
 
-            // Call JavaScript
-            val js = "if(window.AvatarAPI) { window.AvatarAPI.loadModel('$fileUri'); } else { console.error('AvatarAPI not ready'); }"
+            // Read file and convert to data URL for WebView
+            val base64 = Base64.getEncoder().encodeToString(cacheFile.readBytes())
+            val dataUrl = "data:model/gltf-binary;base64,$base64"
+            
+            val js = """
+                setTimeout(() => {
+                    if(window.AvatarAPI) {
+                        console.log('Loading model from data URL...');
+                        window.AvatarAPI.loadModel('$dataUrl');
+                    } else {
+                        console.error('AvatarAPI not available');
+                    }
+                }, 500);
+            """.trimIndent()
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                 webView?.evaluateJavascript(js) { result ->
-                    Log.d(TAG, "JS result: $result")
+                    Log.d(TAG, "JS executed: $result")
                 }
             } else {
                 @Suppress("DEPRECATION")
@@ -227,20 +221,18 @@ class PetForegroundService : Service() {
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error in loadAvatarIntoWebView", e)
+            Log.e(TAG, "Error loading avatar", e)
             e.printStackTrace()
-            updateStatus("Error loading avatar: ${e.message}")
+            updateStatus("Error: ${e.localizedMessage}")
         }
     }
 
     private fun copyUriToCache(uri: Uri): File? {
         return try {
-            Log.d(TAG, "copyUriToCache: $uri")
-            
             val cacheDir = cacheDir
             if (!cacheDir.exists()) cacheDir.mkdirs()
 
-            val tempFile = File(cacheDir, "avatar_${System.currentTimeMillis()}.model")
+            val tempFile = File(cacheDir, "avatar_${System.currentTimeMillis()}")
             
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(tempFile).use { output ->
@@ -248,32 +240,26 @@ class PetForegroundService : Service() {
                 }
             }
 
-            Log.d(TAG, "File copied: ${tempFile.absolutePath} (${tempFile.length()} bytes)")
+            Log.d(TAG, "File cached: ${tempFile.absolutePath}")
             tempFile
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error copying URI to cache", e)
-            e.printStackTrace()
+            Log.e(TAG, "Error copying to cache", e)
             null
         }
     }
 
     private fun updateStatus(message: String) {
-        try {
-            statusTextView?.post {
-                statusTextView?.text = message
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error updating status: $e")
+        statusTextView?.post {
+            statusTextView?.text = message
+            Log.d(TAG, "Status: $message")
         }
     }
 
     private fun stopOverlay() {
-        Log.d(TAG, "stopOverlay()")
         try {
             if (overlayView != null && windowManager != null) {
                 windowManager?.removeView(overlayView)
-                Log.d(TAG, "Overlay removed")
             }
             overlayView = null
             webView = null
@@ -300,14 +286,14 @@ class PetForegroundService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("🐱 Android.EXE Pet")
-            .setContentText("Your pet is running")
+            .setContentText("Your pet is running in the background")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(mainPendingIntent)
-            .addAction(0, "Stop Pet", stopPendingIntent)
+            .addAction(0, "Stop", stopPendingIntent)
             .setAutoCancel(false)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(Notification.CATEGORY_SERVICE)
             .build()
     }
 
@@ -318,18 +304,17 @@ class PetForegroundService : Service() {
                 "Pet Service",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Android.EXE Pet Overlay"
+                description = "Android.EXE Pet overlay notifications"
                 enableVibration(false)
-                setShowBadge(true)
             }
             notificationManager?.createNotificationChannel(channel)
+            Log.d(TAG, "Notification channel created")
         }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        Log.d(TAG, "onDestroy()")
         stopOverlay()
         super.onDestroy()
     }
