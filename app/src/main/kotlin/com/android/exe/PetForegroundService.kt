@@ -130,11 +130,10 @@ class PetForegroundService : Service() {
                 CHANNEL_ID,
                 "Pet Service",
                 NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Android.EXE Pet running"
-                enableVibration = false
-                setShowBadge(true)
-            }
+            )
+            channel.description = "Android.EXE Pet running"
+            channel.enableVibration(false)
+            channel.setShowBadge(true)
             notificationManager?.createNotificationChannel(channel)
         }
     }
