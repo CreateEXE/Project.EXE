@@ -8,6 +8,7 @@ import android.net.Uri
 import android.Manifest
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.android.exe.databinding.ActivityMainBinding
 
@@ -18,6 +19,7 @@ class MainActivity : AppCompatActivity() {
     
     private lateinit var avatarFilePicker: ActivityResultLauncher<Intent>
     private lateinit var modelFilePicker: ActivityResultLauncher<Intent>
+    private lateinit var settingsActivityResult: ActivityResultLauncher<Intent>
     
     private var selectedAvatarUri: String = ""
     private var selectedModelUri: String = ""
@@ -35,6 +37,7 @@ class MainActivity : AppCompatActivity() {
             
             loadSavedDefaults()
             setupFilePickers()
+            setupSettingsActivityResult()
             setupListeners()
         } catch (e: Exception) {
             Log.e(TAG, "Error in onCreate", e)
@@ -62,23 +65,47 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupFilePickers() {
-        avatarFilePicker = FilePickerUtils.createAvatarFilePicker(this) { uri ->
-            if (uri != null) {
-                selectedAvatarUri = uri.toString()
-                val fileName = FilePickerUtils.getUriFileName(this, uri)
-                binding.tvAvatarPath.text = fileName
-                PreferencesManager.saveDefaultAvatar(this, selectedAvatarUri, fileName)
-                Log.d(TAG, "Avatar selected and saved: $fileName")
+        avatarFilePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                val uri = result.data?.data
+                if (uri != null) {
+                    selectedAvatarUri = uri.toString()
+                    val fileName = FilePickerUtils.getUriFileName(this, uri)
+                    binding.tvAvatarPath.text = fileName
+                    PreferencesManager.saveDefaultAvatar(this, selectedAvatarUri, fileName)
+                    Log.d(TAG, "Avatar selected and saved: $fileName")
+                }
             }
         }
 
-        modelFilePicker = FilePickerUtils.createModelFilePicker(this) { uri ->
-            if (uri != null) {
-                selectedModelUri = uri.toString()
-                val fileName = FilePickerUtils.getUriFileName(this, uri)
-                binding.tvModelPath.text = fileName
-                PreferencesManager.saveDefaultModel(this, selectedModelUri, fileName)
-                Log.d(TAG, "Model selected and saved: $fileName")
+        modelFilePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                val uri = result.data?.data
+                if (uri != null) {
+                    selectedModelUri = uri.toString()
+                    val fileName = FilePickerUtils.getUriFileName(this, uri)
+                    binding.tvModelPath.text = fileName
+                    PreferencesManager.saveDefaultModel(this, selectedModelUri, fileName)
+                    Log.d(TAG, "Model selected and saved: $fileName")
+                }
+            }
+        }
+    }
+
+    private fun setupSettingsActivityResult() {
+        settingsActivityResult = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            Log.d(TAG, "Returned from Settings overlay permission screen")
+            
+            // Check permission again after user returns from settings
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.SYSTEM_ALERT_WINDOW)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    Log.d(TAG, "Permission now granted! Starting service...")
+                    startPetServiceNow()
+                } else {
+                    Log.w(TAG, "Permission still not granted")
+                    binding.textView.text = "Permission not enabled. Please enable 'Display over other apps' in settings."
+                }
             }
         }
     }
@@ -92,7 +119,6 @@ class MainActivity : AppCompatActivity() {
                     return@setOnClickListener
                 }
                 
-                // Check for SYSTEM_ALERT_WINDOW permission before starting service
                 checkAndRequestOverlayPermission()
             }
 
@@ -148,22 +174,20 @@ class MainActivity : AppCompatActivity() {
         Log.d(TAG, "Checking SYSTEM_ALERT_WINDOW permission...")
         
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            // Android 6.0+
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.SYSTEM_ALERT_WINDOW)
                 == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 Log.d(TAG, "SYSTEM_ALERT_WINDOW permission already granted")
                 startPetServiceNow()
             } else {
-                Log.d(TAG, "SYSTEM_ALERT_WINDOW permission not granted, requesting...")
+                Log.d(TAG, "SYSTEM_ALERT_WINDOW permission not granted, opening Settings...")
+                binding.textView.text = "Opening Settings... Please enable 'Display over other apps'"
                 val intent = Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     Uri.parse("package:$packageName")
                 )
-                startActivity(intent)
-                binding.textView.text = "Please enable 'Display over other apps' in settings, then click START PET again"
+                settingsActivityResult.launch(intent)
             }
         } else {
-            // Android 5.1 and below - permission is automatically granted
             Log.d(TAG, "Android 5.1 or below - starting service directly")
             startPetServiceNow()
         }
