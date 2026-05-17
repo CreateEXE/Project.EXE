@@ -66,7 +66,7 @@ class MainActivity : AppCompatActivity() {
                 val fileName = FilePickerUtils.getUriFileName(this, uri)
                 binding.tvAvatarPath.text = fileName
                 PreferencesManager.saveDefaultAvatar(this, selectedAvatarUri, fileName)
-                Log.d(TAG, "Avatar selected and saved as default: $fileName")
+                Log.d(TAG, "Avatar selected and saved: $fileName")
             }
         }
 
@@ -76,7 +76,7 @@ class MainActivity : AppCompatActivity() {
                 val fileName = FilePickerUtils.getUriFileName(this, uri)
                 binding.tvModelPath.text = fileName
                 PreferencesManager.saveDefaultModel(this, selectedModelUri, fileName)
-                Log.d(TAG, "Model selected and saved as default: $fileName")
+                Log.d(TAG, "Model selected and saved: $fileName")
             }
         }
     }
@@ -144,7 +144,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startPetService() {
         try {
-            Log.d(TAG, "Starting pet service with avatar=$selectedAvatarUri, model=$selectedModelUri")
+            Log.d(TAG, "Starting pet service")
             
             val serviceIntent = Intent(this, PetForegroundService::class.java).apply {
                 action = PetForegroundService.ACTION_START
