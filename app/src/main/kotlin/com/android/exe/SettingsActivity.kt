@@ -53,7 +53,7 @@ class SettingsActivity : AppCompatActivity() {
                     val fileName = getFileName(uri)
                     PreferencesManager.saveDefaultAvatar(this, uri.toString(), fileName)
                     updateDisplays()
-                    Log.d(TAG, "Avatar saved as default: $fileName")
+                    Log.d(TAG, "Avatar saved: $fileName")
                 }
             }
         }
@@ -65,7 +65,7 @@ class SettingsActivity : AppCompatActivity() {
                     val fileName = getFileName(uri)
                     PreferencesManager.saveDefaultModel(this, uri.toString(), fileName)
                     updateDisplays()
-                    Log.d(TAG, "Model saved as default: $fileName")
+                    Log.d(TAG, "Model saved: $fileName")
                 }
             }
         }
@@ -73,23 +73,19 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         btnChangeAvatar.setOnClickListener {
-            Log.d(TAG, "Change avatar clicked")
             avatarFilePicker.launch(FilePickerUtils.getAvatarPickerIntent())
         }
 
         btnChangeModel.setOnClickListener {
-            Log.d(TAG, "Change model clicked")
             modelFilePicker.launch(FilePickerUtils.getModelPickerIntent())
         }
 
         btnClearAvatar.setOnClickListener {
-            Log.d(TAG, "Clear avatar clicked")
             PreferencesManager.clearDefaultAvatar(this)
             updateDisplays()
         }
 
         btnClearModel.setOnClickListener {
-            Log.d(TAG, "Clear model clicked")
             PreferencesManager.clearDefaultModel(this)
             updateDisplays()
         }
