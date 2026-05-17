@@ -5,8 +5,10 @@ import android.util.Log
 import android.content.Intent
 import android.provider.Settings
 import android.net.Uri
+import android.Manifest
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.ActivityResultLauncher
+import androidx.core.content.ContextCompat
 import com.android.exe.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
@@ -89,9 +91,9 @@ class MainActivity : AppCompatActivity() {
                     binding.textView.text = "Please select avatar and model first"
                     return@setOnClickListener
                 }
-                binding.textView.text = "Pet service started!"
-                binding.tvOverlayStatus.text = "Status: Running"
-                startPetService()
+                
+                // Check for SYSTEM_ALERT_WINDOW permission before starting service
+                checkAndRequestOverlayPermission()
             }
 
             binding.btnPickAvatar.setOnClickListener {
@@ -142,10 +144,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startPetService() {
+    private fun checkAndRequestOverlayPermission() {
+        Log.d(TAG, "Checking SYSTEM_ALERT_WINDOW permission...")
+        
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            // Android 6.0+
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.SYSTEM_ALERT_WINDOW)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "SYSTEM_ALERT_WINDOW permission already granted")
+                startPetServiceNow()
+            } else {
+                Log.d(TAG, "SYSTEM_ALERT_WINDOW permission not granted, requesting...")
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+                binding.textView.text = "Please enable 'Display over other apps' in settings, then click START PET again"
+            }
+        } else {
+            // Android 5.1 and below - permission is automatically granted
+            Log.d(TAG, "Android 5.1 or below - starting service directly")
+            startPetServiceNow()
+        }
+    }
+
+    private fun startPetServiceNow() {
+        Log.d(TAG, "Starting pet service")
+        binding.textView.text = "Pet service started!"
+        binding.tvOverlayStatus.text = "Status: Running"
+        
         try {
-            Log.d(TAG, "Starting pet service")
-            
             val serviceIntent = Intent(this, PetForegroundService::class.java).apply {
                 action = PetForegroundService.ACTION_START
                 putExtra(PetForegroundService.EXTRA_AVATAR_URI, selectedAvatarUri)
