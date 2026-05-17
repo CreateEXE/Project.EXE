@@ -9,8 +9,11 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.net.Uri
 import androidx.core.app.NotificationCompat
 import com.android.exe.overlay.PetOverlayManager
+import java.io.File
+import java.io.FileOutputStream
 
 class PetForegroundService : Service() {
 
@@ -79,9 +82,56 @@ class PetForegroundService : Service() {
             return
         }
 
+        // Convert content:// URI to file path
+        var filePath: String? = null
+        if (avatarUri.isNotEmpty()) {
+            filePath = uriToFilePath(Uri.parse(avatarUri))
+            Log.d(TAG, "Converted URI to file path: $filePath")
+        }
+
         overlayManager = PetOverlayManager(this)
-        overlayManager?.attach(avatarUri)
+        overlayManager?.attach(filePath)
         Log.d(TAG, "Overlay attached successfully")
+    }
+
+    private fun uriToFilePath(uri: Uri): String? {
+        return try {
+            Log.d(TAG, "Converting URI to file path: $uri")
+            
+            val cacheDir = cacheDir
+            if (!cacheDir.exists()) cacheDir.mkdirs()
+
+            val fileName = getFileNameFromUri(uri) ?: "avatar_${System.currentTimeMillis()}"
+            val file = File(cacheDir, fileName)
+
+            contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(file).use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            Log.d(TAG, "File cached to: ${file.absolutePath} (${file.length()} bytes)")
+            file.absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "Error converting URI to file path", e)
+            e.printStackTrace()
+            null
+        }
+    }
+
+    private fun getFileNameFromUri(uri: Uri): String? {
+        return try {
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0) {
+                    it.moveToFirst()
+                    it.getString(nameIndex)
+                } else null
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun stopOverlay() {
