@@ -8,7 +8,6 @@ import android.net.Uri
 import android.Manifest
 import android.widget.Button
 import android.widget.TextView
-import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +24,8 @@ class SetupActivity : AppCompatActivity() {
     
     private lateinit var avatarFilePicker: ActivityResultLauncher<Intent>
     private lateinit var modelFilePicker: ActivityResultLauncher<Intent>
+    private lateinit var overlaySettingsLauncher: ActivityResultLauncher<Intent>
+    private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     
     private var selectedAvatarUri: String = ""
     private var selectedModelUri: String = ""
@@ -38,6 +39,7 @@ class SetupActivity : AppCompatActivity() {
         Log.d(TAG, "SetupActivity created")
         
         setupFilePickers()
+        setupPermissionLaunchers()
         showPermissionsScreen()
     }
 
@@ -69,6 +71,18 @@ class SetupActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupPermissionLaunchers() {
+        overlaySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            Log.d(TAG, "Returned from overlay settings")
+            showPermissionsScreen()
+        }
+
+        notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            Log.d(TAG, "Notification permission result: $granted")
+            showPermissionsScreen()
+        }
+    }
+
     private fun showPermissionsScreen() {
         Log.d(TAG, "Showing permissions screen")
         binding.screenContainer.removeAllViews()
@@ -96,7 +110,7 @@ class SetupActivity : AppCompatActivity() {
             if (overlayPermissionGranted) {
                 showConfigurationScreen()
             } else {
-                binding.tvError.text = "Please enable all permissions first"
+                binding.tvError.text = "Please enable all required permissions first"
             }
         }
     }
@@ -129,19 +143,13 @@ class SetupActivity : AppCompatActivity() {
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:$packageName")
             )
-            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-                Log.d(TAG, "Returned from overlay permission settings")
-                showPermissionsScreen()
-            }.launch(intent)
+            overlaySettingsLauncher.launch(intent)
         }
     }
 
     private fun requestNotificationPermission() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-                Log.d(TAG, "Notification permission result: $granted")
-                showPermissionsScreen()
-            }.launch(Manifest.permission.POST_NOTIFICATIONS)
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
