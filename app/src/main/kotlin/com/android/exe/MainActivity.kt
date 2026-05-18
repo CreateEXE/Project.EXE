@@ -5,11 +5,8 @@ import android.util.Log
 import android.content.Intent
 import android.provider.Settings
 import android.net.Uri
-import android.Manifest
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import com.android.exe.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
@@ -19,7 +16,6 @@ class MainActivity : AppCompatActivity() {
     
     private lateinit var avatarFilePicker: ActivityResultLauncher<Intent>
     private lateinit var modelFilePicker: ActivityResultLauncher<Intent>
-    private lateinit var settingsActivityResult: ActivityResultLauncher<Intent>
     
     private var selectedAvatarUri: String = ""
     private var selectedModelUri: String = ""
@@ -37,7 +33,6 @@ class MainActivity : AppCompatActivity() {
             
             loadSavedDefaults()
             setupFilePickers()
-            setupSettingsActivityResult()
             setupListeners()
         } catch (e: Exception) {
             Log.e(TAG, "Error in onCreate", e)
@@ -65,47 +60,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupFilePickers() {
-        avatarFilePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK) {
-                val uri = result.data?.data
-                if (uri != null) {
-                    selectedAvatarUri = uri.toString()
-                    val fileName = FilePickerUtils.getUriFileName(this, uri)
-                    binding.tvAvatarPath.text = fileName
-                    PreferencesManager.saveDefaultAvatar(this, selectedAvatarUri, fileName)
-                    Log.d(TAG, "Avatar selected and saved: $fileName")
-                }
+        avatarFilePicker = FilePickerUtils.createAvatarFilePicker(this) { uri ->
+            if (uri != null) {
+                selectedAvatarUri = uri.toString()
+                val fileName = FilePickerUtils.getUriFileName(this, uri)
+                binding.tvAvatarPath.text = fileName
+                PreferencesManager.saveDefaultAvatar(this, selectedAvatarUri, fileName)
+                Log.d(TAG, "Avatar selected and saved: $fileName")
             }
         }
 
-        modelFilePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK) {
-                val uri = result.data?.data
-                if (uri != null) {
-                    selectedModelUri = uri.toString()
-                    val fileName = FilePickerUtils.getUriFileName(this, uri)
-                    binding.tvModelPath.text = fileName
-                    PreferencesManager.saveDefaultModel(this, selectedModelUri, fileName)
-                    Log.d(TAG, "Model selected and saved: $fileName")
-                }
-            }
-        }
-    }
-
-    private fun setupSettingsActivityResult() {
-        settingsActivityResult = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            Log.d(TAG, "Returned from Settings overlay permission screen")
-            
-            // Check permission again after user returns from settings
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.SYSTEM_ALERT_WINDOW)
-                    == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    Log.d(TAG, "Permission now granted! Starting service...")
-                    startPetServiceNow()
-                } else {
-                    Log.w(TAG, "Permission still not granted")
-                    binding.textView.text = "Permission not enabled. Please enable 'Display over other apps' in settings."
-                }
+        modelFilePicker = FilePickerUtils.createModelFilePicker(this) { uri ->
+            if (uri != null) {
+                selectedModelUri = uri.toString()
+                val fileName = FilePickerUtils.getUriFileName(this, uri)
+                binding.tvModelPath.text = fileName
+                PreferencesManager.saveDefaultModel(this, selectedModelUri, fileName)
+                Log.d(TAG, "Model selected and saved: $fileName")
             }
         }
     }
@@ -118,8 +89,9 @@ class MainActivity : AppCompatActivity() {
                     binding.textView.text = "Please select avatar and model first"
                     return@setOnClickListener
                 }
-                
-                checkAndRequestOverlayPermission()
+                binding.textView.text = "Pet service started!"
+                binding.tvOverlayStatus.text = "Status: Running"
+                startPetServiceNow()
             }
 
             binding.btnPickAvatar.setOnClickListener {
@@ -170,33 +142,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun checkAndRequestOverlayPermission() {
-        Log.d(TAG, "Checking SYSTEM_ALERT_WINDOW permission...")
-        
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.SYSTEM_ALERT_WINDOW)
-                == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                Log.d(TAG, "SYSTEM_ALERT_WINDOW permission already granted")
-                startPetServiceNow()
-            } else {
-                Log.d(TAG, "SYSTEM_ALERT_WINDOW permission not granted, opening Settings...")
-                binding.textView.text = "Opening Settings... Please enable 'Display over other apps'"
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
-                )
-                settingsActivityResult.launch(intent)
-            }
-        } else {
-            Log.d(TAG, "Android 5.1 or below - starting service directly")
-            startPetServiceNow()
-        }
-    }
-
     private fun startPetServiceNow() {
         Log.d(TAG, "Starting pet service")
-        binding.textView.text = "Pet service started!"
-        binding.tvOverlayStatus.text = "Status: Running"
         
         try {
             val serviceIntent = Intent(this, PetForegroundService::class.java).apply {
