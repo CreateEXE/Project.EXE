@@ -21,14 +21,11 @@ class SetupActivity : AppCompatActivity() {
     private val TAG = "SetupActivity"
     
     private var overlayPermissionGranted = false
-    private var notificationPermissionGranted = false
-    private var accessibilityPermissionGranted = false
     
     private lateinit var avatarFilePicker: ActivityResultLauncher<Intent>
     private lateinit var modelFilePicker: ActivityResultLauncher<Intent>
     private lateinit var overlaySettingsLauncher: ActivityResultLauncher<Intent>
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
-    private lateinit var accessibilitySettingsLauncher: ActivityResultLauncher<Intent>
     
     private var selectedAvatarUri: String = ""
     private var selectedModelUri: String = ""
@@ -79,18 +76,12 @@ class SetupActivity : AppCompatActivity() {
     private fun setupPermissionLaunchers() {
         overlaySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             Log.d(TAG, "Returned from overlay settings")
-            Thread.sleep(300)
+            Thread.sleep(500)
             showPermissionsScreen()
         }
 
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             Log.d(TAG, "Notification permission result: $granted")
-            showPermissionsScreen()
-        }
-
-        accessibilitySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            Log.d(TAG, "Returned from accessibility settings")
-            Thread.sleep(500)
             showPermissionsScreen()
         }
     }
@@ -104,13 +95,11 @@ class SetupActivity : AppCompatActivity() {
         
         val tvOverlayStatus = layout.findViewById<TextView>(R.id.tvOverlayStatus)
         val tvNotificationStatus = layout.findViewById<TextView>(R.id.tvNotificationStatus)
-        val tvAccessibilityStatus = layout.findViewById<TextView>(R.id.tvAccessibilityStatus)
         val btnRequestOverlay = layout.findViewById<Button>(R.id.btnRequestOverlay)
         val btnRequestNotification = layout.findViewById<Button>(R.id.btnRequestNotification)
-        val btnRequestAccessibility = layout.findViewById<Button>(R.id.btnRequestAccessibility)
         val btnNext = layout.findViewById<Button>(R.id.btnNext)
         
-        updatePermissionStatus(tvOverlayStatus, tvNotificationStatus, tvAccessibilityStatus)
+        updatePermissionStatus(tvOverlayStatus, tvNotificationStatus)
         
         btnRequestOverlay.setOnClickListener {
             Log.d(TAG, "Requesting overlay permission...")
@@ -120,11 +109,6 @@ class SetupActivity : AppCompatActivity() {
         btnRequestNotification.setOnClickListener {
             Log.d(TAG, "Requesting notification permission...")
             requestNotificationPermission()
-        }
-
-        btnRequestAccessibility.setOnClickListener {
-            Log.d(TAG, "Requesting accessibility permission...")
-            requestAccessibilityPermission()
         }
         
         btnNext.setOnClickListener {
@@ -137,54 +121,27 @@ class SetupActivity : AppCompatActivity() {
         }
     }
 
-    private fun updatePermissionStatus(tvOverlay: TextView, tvNotification: TextView, tvAccessibility: TextView) {
+    private fun updatePermissionStatus(tvOverlay: TextView, tvNotification: TextView) {
         overlayPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Settings.canDrawOverlays(this)
         } else {
             true
         }
         
-        notificationPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val notificationPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
         } else {
             true
         }
-
-        accessibilityPermissionGranted = isAccessibilityServiceEnabled()
         
-        Log.d(TAG, "Overlay: $overlayPermissionGranted, Notification: $notificationPermissionGranted, Accessibility: $accessibilityPermissionGranted")
+        Log.d(TAG, "Overlay: $overlayPermissionGranted, Notification: $notificationPermissionGranted")
         
         tvOverlay.text = if (overlayPermissionGranted) "✓ Display over other apps: ENABLED" else "✗ Display over other apps: DISABLED"
         tvOverlay.setTextColor(if (overlayPermissionGranted) android.graphics.Color.GREEN else android.graphics.Color.RED)
         
         tvNotification.text = if (notificationPermissionGranted) "✓ Notifications: ENABLED" else "✗ Notifications: DISABLED"
         tvNotification.setTextColor(if (notificationPermissionGranted) android.graphics.Color.GREEN else android.graphics.Color.RED)
-
-        tvAccessibility.text = if (accessibilityPermissionGranted) "✓ Accessibility Service: ENABLED" else "✗ Accessibility Service: DISABLED"
-        tvAccessibility.setTextColor(if (accessibilityPermissionGranted) android.graphics.Color.GREEN else android.graphics.Color.RED)
-    }
-
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        return try {
-            val enabledServices = Settings.Secure.getString(
-                contentResolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            ) ?: ""
-            
-            Log.d(TAG, "Enabled accessibility services: $enabledServices")
-            
-            // Check if our accessibility service is in the list
-            val serviceComponentName = "com.android.exe/com.android.exe.AccessibilityService"
-            val hasService = enabledServices.contains(serviceComponentName, ignoreCase = false)
-            
-            Log.d(TAG, "Checking for: $serviceComponentName, Found: $hasService")
-            
-            hasService
-        } catch (e: Exception) {
-            Log.e(TAG, "Error checking accessibility service", e)
-            false
-        }
     }
 
     private fun requestOverlayPermission() {
@@ -201,11 +158,6 @@ class SetupActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-    }
-
-    private fun requestAccessibilityPermission() {
-        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-        accessibilitySettingsLauncher.launch(intent)
     }
 
     private fun showConfigurationScreen() {
