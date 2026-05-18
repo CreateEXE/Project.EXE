@@ -22,11 +22,13 @@ class SetupActivity : AppCompatActivity() {
     
     private var overlayPermissionGranted = false
     private var notificationPermissionGranted = false
+    private var accessibilityPermissionGranted = false
     
     private lateinit var avatarFilePicker: ActivityResultLauncher<Intent>
     private lateinit var modelFilePicker: ActivityResultLauncher<Intent>
     private lateinit var overlaySettingsLauncher: ActivityResultLauncher<Intent>
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+    private lateinit var accessibilitySettingsLauncher: ActivityResultLauncher<Intent>
     
     private var selectedAvatarUri: String = ""
     private var selectedModelUri: String = ""
@@ -53,7 +55,7 @@ class SetupActivity : AppCompatActivity() {
                 if (uri != null) {
                     selectedAvatarUri = uri.toString()
                     val fileName = FilePickerUtils.getUriFileName(this, uri)
-                    tvSelectedAvatar?.text = "Selected: $fileName"
+                    tvSelectedAvatar?.text = "✓ $fileName"
                     PreferencesManager.saveDefaultAvatar(this, selectedAvatarUri, fileName)
                     Log.d(TAG, "Avatar selected: $fileName")
                 }
@@ -66,7 +68,7 @@ class SetupActivity : AppCompatActivity() {
                 if (uri != null) {
                     selectedModelUri = uri.toString()
                     val fileName = FilePickerUtils.getUriFileName(this, uri)
-                    tvSelectedModel?.text = "Selected: $fileName"
+                    tvSelectedModel?.text = "✓ $fileName"
                     PreferencesManager.saveDefaultModel(this, selectedModelUri, fileName)
                     Log.d(TAG, "Model selected: $fileName")
                 }
@@ -77,12 +79,18 @@ class SetupActivity : AppCompatActivity() {
     private fun setupPermissionLaunchers() {
         overlaySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             Log.d(TAG, "Returned from overlay settings")
-            Thread.sleep(500)  // Small delay to let permission register
+            Thread.sleep(300)
             showPermissionsScreen()
         }
 
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             Log.d(TAG, "Notification permission result: $granted")
+            showPermissionsScreen()
+        }
+
+        accessibilitySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            Log.d(TAG, "Returned from accessibility settings")
+            Thread.sleep(300)
             showPermissionsScreen()
         }
     }
@@ -96,11 +104,13 @@ class SetupActivity : AppCompatActivity() {
         
         val tvOverlayStatus = layout.findViewById<TextView>(R.id.tvOverlayStatus)
         val tvNotificationStatus = layout.findViewById<TextView>(R.id.tvNotificationStatus)
+        val tvAccessibilityStatus = layout.findViewById<TextView>(R.id.tvAccessibilityStatus)
         val btnRequestOverlay = layout.findViewById<Button>(R.id.btnRequestOverlay)
         val btnRequestNotification = layout.findViewById<Button>(R.id.btnRequestNotification)
+        val btnRequestAccessibility = layout.findViewById<Button>(R.id.btnRequestAccessibility)
         val btnNext = layout.findViewById<Button>(R.id.btnNext)
         
-        updatePermissionStatus(tvOverlayStatus, tvNotificationStatus)
+        updatePermissionStatus(tvOverlayStatus, tvNotificationStatus, tvAccessibilityStatus)
         
         btnRequestOverlay.setOnClickListener {
             Log.d(TAG, "Requesting overlay permission...")
@@ -111,19 +121,23 @@ class SetupActivity : AppCompatActivity() {
             Log.d(TAG, "Requesting notification permission...")
             requestNotificationPermission()
         }
+
+        btnRequestAccessibility.setOnClickListener {
+            Log.d(TAG, "Requesting accessibility permission...")
+            requestAccessibilityPermission()
+        }
         
         btnNext.setOnClickListener {
-            Log.d(TAG, "Next clicked - overlay: $overlayPermissionGranted, notification: $notificationPermissionGranted")
+            Log.d(TAG, "Next clicked - overlay: $overlayPermissionGranted")
             if (overlayPermissionGranted) {
                 showConfigurationScreen()
             } else {
-                binding.tvError.text = "Please enable 'Display over other apps' permission to continue"
+                binding.tvError.text = "Please enable 'Display over other apps' to continue"
             }
         }
     }
 
-    private fun updatePermissionStatus(tvOverlay: TextView, tvNotification: TextView) {
-        // For SYSTEM_ALERT_WINDOW, use Settings.canDrawOverlays() instead of checkSelfPermission()
+    private fun updatePermissionStatus(tvOverlay: TextView, tvNotification: TextView, tvAccessibility: TextView) {
         overlayPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Settings.canDrawOverlays(this)
         } else {
@@ -136,14 +150,29 @@ class SetupActivity : AppCompatActivity() {
         } else {
             true
         }
+
+        accessibilityPermissionGranted = isAccessibilityServiceEnabled()
         
-        Log.d(TAG, "Permission status - Overlay: $overlayPermissionGranted, Notification: $notificationPermissionGranted")
+        Log.d(TAG, "Overlay: $overlayPermissionGranted, Notification: $notificationPermissionGranted, Accessibility: $accessibilityPermissionGranted")
         
         tvOverlay.text = if (overlayPermissionGranted) "✓ Display over other apps: ENABLED" else "✗ Display over other apps: DISABLED"
         tvOverlay.setTextColor(if (overlayPermissionGranted) android.graphics.Color.GREEN else android.graphics.Color.RED)
         
         tvNotification.text = if (notificationPermissionGranted) "✓ Notifications: ENABLED" else "✗ Notifications: DISABLED"
         tvNotification.setTextColor(if (notificationPermissionGranted) android.graphics.Color.GREEN else android.graphics.Color.RED)
+
+        tvAccessibility.text = if (accessibilityPermissionGranted) "✓ Accessibility Service: ENABLED" else "✗ Accessibility Service: DISABLED"
+        tvAccessibility.setTextColor(if (accessibilityPermissionGranted) android.graphics.Color.GREEN else android.graphics.Color.RED)
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        return try {
+            val enabledServices = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            enabledServices?.contains("com.android.exe/.AccessibilityService") ?: false
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking accessibility service", e)
+            false
+        }
     }
 
     private fun requestOverlayPermission() {
@@ -162,6 +191,11 @@ class SetupActivity : AppCompatActivity() {
         }
     }
 
+    private fun requestAccessibilityPermission() {
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+        accessibilitySettingsLauncher.launch(intent)
+    }
+
     private fun showConfigurationScreen() {
         Log.d(TAG, "Showing configuration screen")
         binding.screenContainer.removeAllViews()
@@ -173,7 +207,7 @@ class SetupActivity : AppCompatActivity() {
         tvSelectedModel = layout.findViewById(R.id.tvSelectedModel)
         val btnPickAvatar = layout.findViewById<Button>(R.id.btnPickAvatar)
         val btnPickModel = layout.findViewById<Button>(R.id.btnPickModel)
-        val btnFinish = layout.findViewById<Button>(R.id.btnFinish)
+        val btnStart = layout.findViewById<Button>(R.id.btnStart)
         
         btnPickAvatar.setOnClickListener {
             avatarFilePicker.launch(FilePickerUtils.getAvatarPickerIntent())
@@ -183,7 +217,7 @@ class SetupActivity : AppCompatActivity() {
             modelFilePicker.launch(FilePickerUtils.getModelPickerIntent())
         }
         
-        btnFinish.setOnClickListener {
+        btnStart.setOnClickListener {
             if (selectedAvatarUri.isEmpty() || selectedModelUri.isEmpty()) {
                 binding.tvError.text = "Please select both avatar and model"
             } else {
