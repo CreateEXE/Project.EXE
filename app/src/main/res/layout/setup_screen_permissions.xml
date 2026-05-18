@@ -41,6 +41,14 @@
                 android:layout_marginBottom="@dimen/margin_large" />
 
             <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="This permission is REQUIRED for the pet overlay to work."
+                android:textSize="@dimen/text_size_body_small"
+                android:textColor="@color/text_secondary"
+                android:layout_marginBottom="@dimen/margin_large" />
+
+            <TextView
                 android:id="@+id/tvNotificationStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -53,29 +61,13 @@
                 android:id="@+id/btnRequestNotification"
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/button_height_small"
-                android:text="Enable Notifications"
-                android:layout_marginBottom="@dimen/margin_large" />
-
-            <TextView
-                android:id="@+id/tvAccessibilityStatus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Accessibility Service"
-                android:textSize="@dimen/text_size_body_medium"
-                android:textColor="@android:color/holo_red_light"
-                android:layout_marginBottom="@dimen/margin_medium" />
-
-            <Button
-                android:id="@+id/btnRequestAccessibility"
-                android:layout_width="match_parent"
-                android:layout_height="@dimen/button_height_small"
-                android:text="Enable Accessibility Service"
+                android:text="Enable Notifications (Optional)"
                 android:layout_marginBottom="@dimen/margin_large" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Display over other apps is required. Notifications and Accessibility Service are optional but recommended."
+                android:text="This permission is optional but recommended. You can enable it later in Settings."
                 android:textSize="@dimen/text_size_body_small"
                 android:textColor="@color/text_secondary" />
 
