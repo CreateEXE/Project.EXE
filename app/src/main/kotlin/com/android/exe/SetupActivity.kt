@@ -29,6 +29,8 @@ class SetupActivity : AppCompatActivity() {
     
     private var selectedAvatarUri: String = ""
     private var selectedModelUri: String = ""
+    private var tvSelectedAvatar: TextView? = null
+    private var tvSelectedModel: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,7 +52,7 @@ class SetupActivity : AppCompatActivity() {
                 if (uri != null) {
                     selectedAvatarUri = uri.toString()
                     val fileName = FilePickerUtils.getUriFileName(this, uri)
-                    binding.tvSelectedAvatar.text = "Selected: $fileName"
+                    tvSelectedAvatar?.text = "Selected: $fileName"
                     PreferencesManager.saveDefaultAvatar(this, selectedAvatarUri, fileName)
                     Log.d(TAG, "Avatar selected: $fileName")
                 }
@@ -63,7 +65,7 @@ class SetupActivity : AppCompatActivity() {
                 if (uri != null) {
                     selectedModelUri = uri.toString()
                     val fileName = FilePickerUtils.getUriFileName(this, uri)
-                    binding.tvSelectedModel.text = "Selected: $fileName"
+                    tvSelectedModel?.text = "Selected: $fileName"
                     PreferencesManager.saveDefaultModel(this, selectedModelUri, fileName)
                     Log.d(TAG, "Model selected: $fileName")
                 }
@@ -160,8 +162,8 @@ class SetupActivity : AppCompatActivity() {
         val layout = layoutInflater.inflate(R.layout.setup_screen_config, binding.screenContainer, false)
         binding.screenContainer.addView(layout)
         
-        binding.tvSelectedAvatar = layout.findViewById(R.id.tvSelectedAvatar)
-        binding.tvSelectedModel = layout.findViewById(R.id.tvSelectedModel)
+        tvSelectedAvatar = layout.findViewById(R.id.tvSelectedAvatar)
+        tvSelectedModel = layout.findViewById(R.id.tvSelectedModel)
         val btnPickAvatar = layout.findViewById<Button>(R.id.btnPickAvatar)
         val btnPickModel = layout.findViewById<Button>(R.id.btnPickModel)
         val btnFinish = layout.findViewById<Button>(R.id.btnFinish)
