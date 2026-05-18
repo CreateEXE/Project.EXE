@@ -1,5 +1,6 @@
 package com.android.exe
 
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.content.Intent
@@ -76,6 +77,7 @@ class SetupActivity : AppCompatActivity() {
     private fun setupPermissionLaunchers() {
         overlaySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             Log.d(TAG, "Returned from overlay settings")
+            Thread.sleep(500)  // Small delay to let permission register
             showPermissionsScreen()
         }
 
@@ -101,36 +103,41 @@ class SetupActivity : AppCompatActivity() {
         updatePermissionStatus(tvOverlayStatus, tvNotificationStatus)
         
         btnRequestOverlay.setOnClickListener {
+            Log.d(TAG, "Requesting overlay permission...")
             requestOverlayPermission()
         }
         
         btnRequestNotification.setOnClickListener {
+            Log.d(TAG, "Requesting notification permission...")
             requestNotificationPermission()
         }
         
         btnNext.setOnClickListener {
+            Log.d(TAG, "Next clicked - overlay: $overlayPermissionGranted, notification: $notificationPermissionGranted")
             if (overlayPermissionGranted) {
                 showConfigurationScreen()
             } else {
-                binding.tvError.text = "Please enable all required permissions first"
+                binding.tvError.text = "Please enable 'Display over other apps' permission to continue"
             }
         }
     }
 
     private fun updatePermissionStatus(tvOverlay: TextView, tvNotification: TextView) {
-        overlayPermissionGranted = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.SYSTEM_ALERT_WINDOW) ==
-            android.content.pm.PackageManager.PERMISSION_GRANTED
+        // For SYSTEM_ALERT_WINDOW, use Settings.canDrawOverlays() instead of checkSelfPermission()
+        overlayPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Settings.canDrawOverlays(this)
         } else {
             true
         }
         
-        notificationPermissionGranted = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        notificationPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
         } else {
             true
         }
+        
+        Log.d(TAG, "Permission status - Overlay: $overlayPermissionGranted, Notification: $notificationPermissionGranted")
         
         tvOverlay.text = if (overlayPermissionGranted) "✓ Display over other apps: ENABLED" else "✗ Display over other apps: DISABLED"
         tvOverlay.setTextColor(if (overlayPermissionGranted) android.graphics.Color.GREEN else android.graphics.Color.RED)
@@ -140,7 +147,7 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun requestOverlayPermission() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val intent = Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:$packageName")
@@ -150,7 +157,7 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun requestNotificationPermission() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
