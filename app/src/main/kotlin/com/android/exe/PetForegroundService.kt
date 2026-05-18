@@ -34,7 +34,7 @@ class PetForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "Service created")
+        Log.d(TAG, "Service onCreate()")
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
     }
@@ -45,26 +45,29 @@ class PetForegroundService : Service() {
         try {
             val notification = createNotification()
             startForeground(NOTIFICATION_ID, notification)
-            Log.d(TAG, "Notification posted")
+            Log.d(TAG, "Foreground notification posted")
         } catch (e: Exception) {
             Log.e(TAG, "Error posting notification", e)
+            e.printStackTrace()
         }
 
         when (intent?.action) {
             ACTION_START -> {
                 avatarUri = intent.getStringExtra(EXTRA_AVATAR_URI) ?: ""
                 modelUri = intent.getStringExtra(EXTRA_MODEL_URI) ?: ""
-                Log.d(TAG, "Starting overlay with avatar: $avatarUri")
+                Log.d(TAG, "ACTION_START received")
+                Log.d(TAG, "Avatar URI: $avatarUri")
+                Log.d(TAG, "Model URI: $modelUri")
                 
                 try {
                     startOverlay()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error starting overlay", e)
+                    Log.e(TAG, "FATAL ERROR in startOverlay", e)
                     e.printStackTrace()
                 }
             }
             ACTION_STOP -> {
-                Log.d(TAG, "Stopping overlay")
+                Log.d(TAG, "ACTION_STOP received")
                 stopOverlay()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -75,45 +78,73 @@ class PetForegroundService : Service() {
     }
 
     private fun startOverlay() {
-        Log.d(TAG, "Creating PetOverlayManager...")
+        Log.d(TAG, ">>> startOverlay() called")
         
         if (overlayManager != null) {
-            Log.w(TAG, "Overlay already running")
+            Log.w(TAG, "Overlay already running, skipping")
             return
         }
 
-        // Convert content:// URI to file path
-        var filePath: String? = null
-        if (avatarUri.isNotEmpty()) {
-            filePath = uriToFilePath(Uri.parse(avatarUri))
-            Log.d(TAG, "Converted URI to file path: $filePath")
-        }
+        try {
+            Log.d(TAG, "Converting avatar URI to file path...")
+            var filePath: String? = null
+            
+            if (avatarUri.isNotEmpty()) {
+                filePath = uriToFilePath(Uri.parse(avatarUri))
+                Log.d(TAG, "Avatar file path: $filePath")
+                
+                if (filePath != null) {
+                    val file = File(filePath)
+                    Log.d(TAG, "File exists: ${file.exists()}")
+                    Log.d(TAG, "File size: ${file.length()} bytes")
+                    Log.d(TAG, "File readable: ${file.canRead()}")
+                }
+            }
 
-        overlayManager = PetOverlayManager(this)
-        overlayManager?.attach(filePath)
-        Log.d(TAG, "Overlay attached successfully")
+            Log.d(TAG, "Creating PetOverlayManager...")
+            overlayManager = PetOverlayManager(this)
+            
+            Log.d(TAG, "Calling overlayManager.attach($filePath)...")
+            overlayManager?.attach(filePath)
+            
+            Log.d(TAG, "✓ Overlay attached successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "✗ Exception in startOverlay", e)
+            e.printStackTrace()
+        }
     }
 
     private fun uriToFilePath(uri: Uri): String? {
         return try {
-            Log.d(TAG, "Converting URI to file path: $uri")
+            Log.d(TAG, "uriToFilePath: $uri")
             
             val cacheDir = cacheDir
-            if (!cacheDir.exists()) cacheDir.mkdirs()
+            if (!cacheDir.exists()) {
+                cacheDir.mkdirs()
+                Log.d(TAG, "Created cache directory")
+            }
 
             val fileName = getFileNameFromUri(uri) ?: "avatar_${System.currentTimeMillis()}"
             val file = File(cacheDir, fileName)
 
-            contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(file).use { output ->
+            Log.d(TAG, "Copying file to cache: $fileName")
+            
+            val inputStream = contentResolver.openInputStream(uri)
+            if (inputStream == null) {
+                Log.e(TAG, "Failed to open input stream for URI: $uri")
+                return null
+            }
+
+            FileOutputStream(file).use { output ->
+                inputStream.use { input ->
                     input.copyTo(output)
                 }
             }
 
-            Log.d(TAG, "File cached to: ${file.absolutePath} (${file.length()} bytes)")
+            Log.d(TAG, "✓ File copied to cache: ${file.absolutePath} (${file.length()} bytes)")
             file.absolutePath
         } catch (e: Exception) {
-            Log.e(TAG, "Error converting URI to file path", e)
+            Log.e(TAG, "✗ Error in uriToFilePath", e)
             e.printStackTrace()
             null
         }
@@ -130,18 +161,19 @@ class PetForegroundService : Service() {
                 } else null
             }
         } catch (e: Exception) {
+            Log.e(TAG, "Error getting file name from URI", e)
             null
         }
     }
 
     private fun stopOverlay() {
-        Log.d(TAG, "Stopping overlay...")
+        Log.d(TAG, ">>> stopOverlay() called")
         try {
             overlayManager?.detach()
             overlayManager = null
-            Log.d(TAG, "Overlay detached")
+            Log.d(TAG, "✓ Overlay detached")
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping overlay", e)
+            Log.e(TAG, "✗ Error stopping overlay", e)
         }
     }
 
@@ -162,7 +194,7 @@ class PetForegroundService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("🐱 Android.EXE Pet")
-            .setContentText("Your pet is running in the background")
+            .setContentText("Your pet is running")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(mainPendingIntent)
             .addAction(0, "Stop", stopPendingIntent)
@@ -181,17 +213,18 @@ class PetForegroundService : Service() {
                 "Pet Service",
                 NotificationManager.IMPORTANCE_HIGH
             )
-            channel.description = "Android.EXE Pet running"
+            channel.description = "Android.EXE Pet"
             channel.enableVibration(false)
             channel.setShowBadge(true)
             notificationManager?.createNotificationChannel(channel)
+            Log.d(TAG, "Notification channel created")
         }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        Log.d(TAG, "Service destroyed")
+        Log.d(TAG, "onDestroy()")
         stopOverlay()
         super.onDestroy()
     }
