@@ -90,7 +90,7 @@ class SetupActivity : AppCompatActivity() {
 
         accessibilitySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             Log.d(TAG, "Returned from accessibility settings")
-            Thread.sleep(300)
+            Thread.sleep(500)
             showPermissionsScreen()
         }
     }
@@ -167,8 +167,20 @@ class SetupActivity : AppCompatActivity() {
 
     private fun isAccessibilityServiceEnabled(): Boolean {
         return try {
-            val enabledServices = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-            enabledServices?.contains("com.android.exe/.AccessibilityService") ?: false
+            val enabledServices = Settings.Secure.getString(
+                contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: ""
+            
+            Log.d(TAG, "Enabled accessibility services: $enabledServices")
+            
+            // Check if our accessibility service is in the list
+            val serviceComponentName = "com.android.exe/com.android.exe.AccessibilityService"
+            val hasService = enabledServices.contains(serviceComponentName, ignoreCase = false)
+            
+            Log.d(TAG, "Checking for: $serviceComponentName, Found: $hasService")
+            
+            hasService
         } catch (e: Exception) {
             Log.e(TAG, "Error checking accessibility service", e)
             false
