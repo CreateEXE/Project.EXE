@@ -1,4 +1,4 @@
-name: Build Debug APK
+name: Build APK
 
 on:
   push:
@@ -7,9 +7,13 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+# Use Node.js 24 to suppress the deprecation warnings on all actions
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
-    name: Assemble debug APK
+    name: build
     runs-on: ubuntu-latest
 
     steps:
@@ -62,76 +66,40 @@ jobs:
 
       # ── 8. Bundle JS libraries into assets (offline renderer) ─────────────
       #
-      # FIXES vs original workflow:
-      #   • three@0.152.2/build/three.min.js    → three@0.164.1  (version bump)
-      #     three.min.js (UMD) was removed after r151; app uses ESM importmap,
-      #     so the correct file is three.module.js
-      #   • @pixiv/three-vrm@1.0.11/lib/three-vrm.js
-      #                                          → @pixiv/three-vrm@2.1.2
-      #     v2 has a completely different API; bundle path is
-      #     three-vrm.module.min.js, not three-vrm.js
-      #   • GLTFLoader.js was missing (needed by avatar_renderer.html)
-      #   • OrbitControls.js was missing (imported in HTML)
-      #   • Use `npm install` instead of bare curl — verified checksums,
-      #     no CDN 404 races; files come straight from npm registry
+      # Uses npm install instead of curl to avoid CDN 404s.
+      # Versions:
+      #   three@0.164.1 — satisfies @pixiv/three-vrm@2.1.2 peer dep ^0.164.1
+      #                   (three@0.165.0 violates the semver range ^0.164.x)
+      #   @pixiv/three-vrm@2.1.2 — VRM 0.x and 1.0 support, ESM module build
       #
-      # VERSION PIN RATIONALE:
-      #   @pixiv/three-vrm@2.1.2 declares peer: three@"^0.164.1"
-      #   Semver ^0.164.1 = >=0.164.1 <0.165.0, so three@0.165.0 is REJECTED
-      #   (that was the ERESOLVE error in the previous run).
-      #   Solution: pin three to 0.164.1 — the exact version three-vrm 2.1.2 tested against.
-      #
-      - name: Bundle JS libraries into assets (offline renderer)
+      - name: Bundle JS libraries into assets
         run: |
           mkdir -p app/src/main/assets/js
-
-          # Install both packages into a temp prefix (no package.json needed)
-          # three@0.164.1 satisfies @pixiv/three-vrm@2.1.2's peer dep ^0.164.1
           npm install --prefix /tmp/npm-js \
             three@0.164.1 \
             @pixiv/three-vrm@2.1.2
-
           NPM=/tmp/npm-js/node_modules
+          cp "$NPM/three/build/three.module.js"                           app/src/main/assets/js/three.module.js
+          cp "$NPM/@pixiv/three-vrm/lib/three-vrm.module.min.js"         app/src/main/assets/js/three-vrm.module.min.js
+          cp "$NPM/three/examples/jsm/loaders/GLTFLoader.js"             app/src/main/assets/js/GLTFLoader.js
+          cp "$NPM/three/examples/jsm/controls/OrbitControls.js"         app/src/main/assets/js/OrbitControls.js
+          echo "Bundled JS assets:"; ls -lh app/src/main/assets/js/
 
-          # three.js r164 — ESM build (importmap "three" → this file)
-          cp "$NPM/three/build/three.module.js" \
-             app/src/main/assets/js/three.module.js
-
-          # three-vrm 2.1.2 — ESM minified (importmap "@pixiv/three-vrm")
-          cp "$NPM/@pixiv/three-vrm/lib/three-vrm.module.min.js" \
-             app/src/main/assets/js/three-vrm.module.min.js
-
-          # GLTFLoader — needed by avatar_renderer.html to parse .glb / .vrm
-          cp "$NPM/three/examples/jsm/loaders/GLTFLoader.js" \
-             app/src/main/assets/js/GLTFLoader.js
-
-          # OrbitControls — imported by avatar_renderer.html (three/addons/ alias)
-          cp "$NPM/three/examples/jsm/controls/OrbitControls.js" \
-             app/src/main/assets/js/OrbitControls.js
-
-          echo "JS assets bundled:"
-          ls -lh app/src/main/assets/js/
-
-      # ── 9. Regenerate gradle wrapper jar ──────────────────────────────────
+      # ── 9. Generate gradlew + wrapper jar ────────────────────────────────
       #
-      # FIX: gradle/wrapper/gradle-wrapper.jar is a binary that is gitignored
-      #      (not committed to the repo). Without it ./gradlew crashes
-      #      immediately with "Could not find or load main class" (blank class
-      #      name) before Gradle even starts.
+      # gradlew and gradle-wrapper.jar are binary/generated files that are
+      # gitignored and not committed to the repo.
+      # setup-gradle@v4 above provisioned a real Gradle 8.6 installation.
+      # We use that binary to regenerate both files in-place.
       #
-      #      setup-gradle@v4 already provisioned a full Gradle 8.6 installation.
-      #      We use that `gradle` binary to run `gradle wrapper`, which writes a
-      #      fresh verified gradle-wrapper.jar into gradle/wrapper/ in-place.
-      #      After this step ./gradlew works normally.
-      #
-      - name: Regenerate gradle wrapper jar
+      - name: Generate gradle wrapper
         run: |
           GRADLE_BIN=$(find /home/runner/work/_temp/.gradle-actions/gradle-installations/installs \
             -name "gradle" -type f 2>/dev/null | head -1)
-          echo "Using gradle binary: $GRADLE_BIN"
+          echo "Gradle binary: $GRADLE_BIN"
           "$GRADLE_BIN" wrapper --gradle-version 8.6 --distribution-type bin
           chmod +x gradlew
-          ls -lh gradle/wrapper/gradle-wrapper.jar
+          ls -lh gradlew gradle/wrapper/gradle-wrapper.jar
 
       # ── 10. Build debug APK ───────────────────────────────────────────────
       - name: Build debug APK
@@ -141,7 +109,7 @@ jobs:
             --stacktrace \
             --no-daemon
 
-      # ── 11. Upload APK artifact ───────────────────────────────────────────
+      # ── 11. Upload APK ────────────────────────────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         if: always()
