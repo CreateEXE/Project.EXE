@@ -23,22 +23,21 @@ class AvatarWebView(context: Context) : WebView(context) {
     }
 
     var listener: Listener? = null
-    private var pendingModelPath: String? = null
-    private var rendererReady = false
+    private var pendingModelUri: String? = null   // stores a data-URI if renderer not ready yet
+    private var rendererReady  = false
 
     init {
         settings.apply {
-            javaScriptEnabled               = true
-            domStorageEnabled               = true
-            allowFileAccess                 = true
-            allowContentAccess              = true
-            // Allow file:// to load other file:// resources (assets)
+            javaScriptEnabled                = true
+            domStorageEnabled                = true
+            allowFileAccess                  = true
+            allowContentAccess               = true
             @Suppress("DEPRECATION")
-            allowFileAccessFromFileURLs     = true
+            allowFileAccessFromFileURLs      = true
             @Suppress("DEPRECATION")
             allowUniversalAccessFromFileURLs = true
-            mixedContentMode                = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            cacheMode                       = WebSettings.LOAD_DEFAULT
+            mixedContentMode                 = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            cacheMode                        = WebSettings.LOAD_DEFAULT
             mediaPlaybackRequiresUserGesture = false
         }
 
@@ -53,10 +52,7 @@ class AvatarWebView(context: Context) : WebView(context) {
             ) {
                 Log.e(TAG, "WebView load error: ${error?.description} url=${request?.url}")
             }
-
             override fun onPageFinished(view: WebView?, url: String?) {
-                // Page HTML loaded — JS init() runs via window.onload.
-                // Don't do anything here; wait for AndroidBridge.onRendererReady().
                 Log.d(TAG, "Page finished: $url")
             }
         }
@@ -67,7 +63,7 @@ class AvatarWebView(context: Context) : WebView(context) {
                 when (msg.messageLevel()) {
                     ConsoleMessage.MessageLevel.ERROR   -> Log.e(TAG, "JS: $text")
                     ConsoleMessage.MessageLevel.WARNING -> Log.w(TAG, "JS: $text")
-                    else                               -> Log.d(TAG, "JS: $text")
+                    else                                -> Log.d(TAG, "JS: $text")
                 }
                 return true
             }
@@ -85,10 +81,11 @@ class AvatarWebView(context: Context) : WebView(context) {
             post {
                 rendererReady = true
                 listener?.onRendererReady()
-                // Load any model that was queued before the renderer was ready
-                pendingModelPath?.let { path ->
-                    pendingModelPath = null
-                    loadModelFromPath(path)
+                // Deliver any model that was queued before the renderer was up
+                pendingModelUri?.let { uri ->
+                    pendingModelUri = null
+                    Log.d(TAG, "Delivering queued model to renderer")
+                    evaluateJavascript("AvatarAPI.loadModel('$uri');", null)
                 }
             }
         }
@@ -109,13 +106,6 @@ class AvatarWebView(context: Context) : WebView(context) {
     // ── Kotlin → JS ───────────────────────────────────────────────────────────
 
     fun loadModelFromPath(path: String) {
-        if (!rendererReady) {
-            // Renderer not up yet — queue it
-            pendingModelPath = path
-            Log.d(TAG, "Model queued (renderer not ready): $path")
-            return
-        }
-
         val file = File(path)
         if (!file.exists()) {
             Log.e(TAG, "File not found: $path")
@@ -127,7 +117,7 @@ class AvatarWebView(context: Context) : WebView(context) {
             path.endsWith(".vrm",  ignoreCase = true) -> "model/gltf-binary"
             path.endsWith(".glb",  ignoreCase = true) -> "model/gltf-binary"
             path.endsWith(".gltf", ignoreCase = true) -> "model/gltf+json"
-            else -> "application/octet-stream"
+            else                                       -> "application/octet-stream"
         }
 
         Thread {
@@ -135,10 +125,10 @@ class AvatarWebView(context: Context) : WebView(context) {
                 val bytes = file.readBytes()
                 val b64   = Base64.encodeToString(bytes, Base64.NO_WRAP)
                 val uri   = "data:$mimeType;base64,$b64"
-                post { evaluateJavascript("AvatarAPI.loadModel('$uri');", null) }
-                Log.i(TAG, "Sent model to JS: ${bytes.size / 1024} KB")
+                Log.i(TAG, "Encoded model: ${bytes.size / 1024} KB")
+                post { dispatchModelUri(uri) }
             } catch (e: Exception) {
-                Log.e(TAG, "File read failed", e)
+                Log.e(TAG, "File read failed: ${e.message}", e)
                 post { listener?.onModelError(e.message ?: "Read error") }
             }
         }.start()
@@ -149,22 +139,37 @@ class AvatarWebView(context: Context) : WebView(context) {
             try {
                 val bytes = context.contentResolver.openInputStream(uri)
                     ?.readBytes()
-                    ?: run { post { listener?.onModelError("Cannot open Uri") }; return@Thread }
+                    ?: run {
+                        post { listener?.onModelError("Cannot open Uri: $uri") }
+                        return@Thread
+                    }
                 val mime = if (uri.path?.endsWith(".gltf", ignoreCase = true) == true)
                     "model/gltf+json" else "model/gltf-binary"
                 val b64  = Base64.encodeToString(bytes, Base64.NO_WRAP)
                 val data = "data:$mime;base64,$b64"
-                post {
-                    if (rendererReady) evaluateJavascript("AvatarAPI.loadModel('$data');", null)
-                    else pendingModelPath = null.also {
-                        evaluateJavascript("AvatarAPI.loadModel('$data');", null)
-                    }
-                }
+                Log.i(TAG, "loadModelFromUri encoded: ${bytes.size / 1024} KB")
+                post { dispatchModelUri(data) }
             } catch (e: Exception) {
-                Log.e(TAG, "loadModelFromUri failed", e)
+                Log.e(TAG, "loadModelFromUri failed: ${e.message}", e)
                 post { listener?.onModelError(e.message ?: "Error") }
             }
         }.start()
+    }
+
+    /**
+     * Either sends the model data-URI to JS immediately (if renderer is ready)
+     * or queues it so onRendererReady() delivers it once the page is initialised.
+     *
+     * Previously this had a Kotlin null.also{} bug that set pendingModelPath = null
+     * and then immediately called evaluateJavascript before the renderer was ready.
+     */
+    private fun dispatchModelUri(dataUri: String) {
+        if (rendererReady) {
+            evaluateJavascript("AvatarAPI.loadModel('$dataUri');", null)
+        } else {
+            Log.d(TAG, "Renderer not ready — queuing model")
+            pendingModelUri = dataUri
+        }
     }
 
     fun playExpression(emotion: PetEmotion) {
@@ -174,7 +179,7 @@ class AvatarWebView(context: Context) : WebView(context) {
         )
     }
 
-    fun resetExpression()        = evaluateJavascript("AvatarAPI.resetExpression();", null)
+    fun resetExpression()          = evaluateJavascript("AvatarAPI.resetExpression();", null)
     fun lookAt(x: Float, y: Float) = evaluateJavascript("AvatarAPI.lookAt($x,$y);", null)
-    fun setFraming(mode: String) = evaluateJavascript("AvatarAPI.setFraming('$mode');", null)
+    fun setFraming(mode: String)   = evaluateJavascript("AvatarAPI.setFraming('$mode');", null)
 }
