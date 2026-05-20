@@ -17,14 +17,13 @@ class PetOverlayManager(private val context: Context) {
 
     companion object {
         private const val TAG = "PetOverlay"
-        private const val OVERLAY_WIDTH_DP  = 160
-        private const val OVERLAY_HEIGHT_DP = 240
+        private const val OVERLAY_WIDTH_DP   = 160
+        private const val OVERLAY_HEIGHT_DP  = 240
         private const val BUBBLE_MAX_WIDTH_DP = 220
     }
 
     private val wm: WindowManager =
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-
     private val density = context.resources.displayMetrics.density
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -32,39 +31,48 @@ class PetOverlayManager(private val context: Context) {
     private var overlayRoot: FrameLayout? = null
     var avatarView: AvatarWebView? = null
         private set
-
     private var speechBubble: TextView? = null
+
+    // ── Async jobs ─────────────────────────────────────────────────────────────
     private var bubbleJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     // ── Drag state ─────────────────────────────────────────────────────────────
     private var params: WindowManager.LayoutParams? = null
     private var dragging = false
-    private var initialTouchX = 0f; private var initialTouchY = 0f
-    private var initialX = 0;       private var initialY = 0
+    private var initialTouchX = 0f
+    private var initialTouchY = 0f
+    private var initialX = 0
+    private var initialY = 0
 
-    // ── Attach ─────────────────────────────────────────────────────────────────
-
-    /**
-     * Creates the overlay window and the AvatarWebView inside it.
-     *
-     * MUST run on the main thread — WebView's constructor calls
-     * new Handler(Looper.myLooper()) internally. If the calling thread has no
-     * Looper (e.g. a Service worker thread or a coroutine dispatcher),
-     * myLooper() returns null and Android throws:
-     *   "Attempt to read from field 'MessageQueue Looper.mQueue' on a null object"
-     *
-     * This method enforces the main-thread requirement by re-posting to
-     * mainHandler when called from any other thread.
-     */
+    // ─────────────────────────────────────────────────────────────────────────
+    // attach()
+    //
+    // MUST run on the main thread — WebView's constructor calls
+    //   new Handler(Looper.myLooper(), ...)  internally.
+    // If myLooper() is null (any non-Looper thread) Android throws:
+    //   "Attempt to read from field 'MessageQueue Looper.mQueue' on null"
+    //
+    // Touch-blocking fix:
+    //   A plain FrameLayout with setOnTouchListener does NOT intercept
+    //   touches from its children. The WebView (a Chromium SurfaceView
+    //   internally) consumes every MotionEvent before the parent listener
+    //   ever fires. We override onInterceptTouchEvent() to return true so
+    //   the FrameLayout claims all touches first, then the setOnTouchListener
+    //   receives them correctly.
+    //
+    // FLAG fixes:
+    //   FLAG_LAYOUT_NO_LIMITS  — removed; it extends the window's touchable
+    //                            area far beyond the visible overlay bounds.
+    //   FLAG_TRANSLUCENT_STATUS — removed; not needed, causes rendering issues
+    //                             on some ROMs.
+    // ─────────────────────────────────────────────────────────────────────────
     fun attach(avatarPath: String?) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            // Called from a background thread / coroutine — re-dispatch to main.
             mainHandler.post { attach(avatarPath) }
             return
         }
-
-        if (overlayRoot != null) return  // already attached
+        if (overlayRoot != null) return
 
         val w = (OVERLAY_WIDTH_DP  * density).toInt()
         val h = (OVERLAY_HEIGHT_DP * density).toInt()
@@ -76,9 +84,12 @@ class PetOverlayManager(private val context: Context) {
             else
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE,
+            // FLAG_NOT_FOCUSABLE  — window never takes keyboard focus
+            // FLAG_NOT_TOUCH_MODAL — touches outside window bounds go to
+            //                        the app/window behind us
+            // Do NOT add FLAG_LAYOUT_NO_LIMITS or FLAG_TRANSLUCENT_STATUS
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-            WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.END
@@ -86,24 +97,25 @@ class PetOverlayManager(private val context: Context) {
             y = 120
         }
 
-        // Root container
-        val root = FrameLayout(context).also { overlayRoot = it }
+        // ── Root container: anonymous subclass that intercepts ALL touches ──
+        // Without this override, the WebView child eats every MotionEvent
+        // before the parent's onTouchListener sees it, making the overlay
+        // impossible to drag and blocking the screen area for other apps.
+        val root = object : FrameLayout(context) {
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true
+        }.also { overlayRoot = it }
         root.setBackgroundColor(Color.TRANSPARENT)
 
-        // Avatar WebView — safe: we are guaranteed on main thread here
+        // ── Avatar WebView — safe: confirmed on main thread ─────────────────
         val avw = AvatarWebView(context).also { avatarView = it }
         avw.setBackgroundColor(Color.TRANSPARENT)
         avw.background?.alpha = 0
+        root.addView(avw, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
 
-        root.addView(
-            avw,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        // Speech bubble (hidden by default)
+        // ── Speech bubble ────────────────────────────────────────────────────
         val bubble = TextView(context).apply {
             visibility = View.GONE
             setTextColor(Color.WHITE)
@@ -113,27 +125,22 @@ class PetOverlayManager(private val context: Context) {
             maxWidth = (BUBBLE_MAX_WIDTH_DP * density).toInt()
         }
         speechBubble = bubble
-        root.addView(
-            bubble,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            ).also {
-                it.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            }
-        )
+        root.addView(bubble, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).also { it.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL })
 
-        // Drag gesture detector
-        val gestureDetector = GestureDetector(
-            context,
+        // ── Double-tap to cycle size ─────────────────────────────────────────
+        val gestureDetector = GestureDetector(context,
             object : GestureDetector.SimpleOnGestureListener() {
                 override fun onDoubleTap(e: MotionEvent): Boolean {
-                    cycleSizeMode()
-                    return true
+                    cycleSizeMode(); return true
                 }
-            }
-        )
+            })
 
+        // ── Touch: drag to move, single tap to interact ──────────────────────
+        // onInterceptTouchEvent (above) guarantees this listener receives
+        // events instead of the WebView child.
         root.setOnTouchListener { v, event ->
             gestureDetector.onTouchEvent(event)
             when (event.action) {
@@ -160,27 +167,25 @@ class PetOverlayManager(private val context: Context) {
         }
 
         wm.addView(root, params)
-        Log.i(TAG, "Overlay attached")
+        Log.i(TAG, "Overlay attached (${w}×${h}px)")
 
         if (!avatarPath.isNullOrBlank()) {
             avw.loadModelFromPath(avatarPath)
         }
     }
 
-    // ── Detach ─────────────────────────────────────────────────────────────────
-
+    // ─────────────────────────────────────────────────────────────────────────
+    // detach
+    // ─────────────────────────────────────────────────────────────────────────
     fun detach() {
-        // WindowManager operations must also be on main thread
         if (Looper.myLooper() != Looper.getMainLooper()) {
             mainHandler.post { detach() }
             return
         }
-        overlayRoot?.let {
-            try { wm.removeView(it) } catch (_: Exception) {}
-        }
+        overlayRoot?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         avatarView?.destroy()
-        avatarView  = null
-        overlayRoot = null
+        avatarView   = null
+        overlayRoot  = null
         speechBubble = null
         scope.cancel()
         Log.i(TAG, "Overlay detached")
@@ -188,8 +193,9 @@ class PetOverlayManager(private val context: Context) {
 
     fun isAttached() = overlayRoot != null
 
-    // ── Speech bubble ──────────────────────────────────────────────────────────
-
+    // ─────────────────────────────────────────────────────────────────────────
+    // Speech bubble
+    // ─────────────────────────────────────────────────────────────────────────
     fun showSpeechBubble(text: String, durationMs: Long = 5000L) {
         bubbleJob?.cancel()
         speechBubble?.let { b ->
@@ -207,8 +213,9 @@ class PetOverlayManager(private val context: Context) {
         speechBubble?.visibility = View.GONE
     }
 
-    // ── Size cycling ───────────────────────────────────────────────────────────
-
+    // ─────────────────────────────────────────────────────────────────────────
+    // Size cycling  (double-tap)
+    // ─────────────────────────────────────────────────────────────────────────
     private var sizeMode = 0
 
     private fun cycleSizeMode() {
@@ -226,14 +233,15 @@ class PetOverlayManager(private val context: Context) {
             }
         }
         when (sizeMode) {
-            1 -> avatarView?.setFraming("full")
-            2 -> avatarView?.setFraming("face")
+            1    -> avatarView?.setFraming("full")
+            2    -> avatarView?.setFraming("face")
             else -> avatarView?.setFraming("bust")
         }
     }
 
-    // ── Avatar controls ────────────────────────────────────────────────────────
-
+    // ─────────────────────────────────────────────────────────────────────────
+    // Delegated avatar controls
+    // ─────────────────────────────────────────────────────────────────────────
     fun playExpression(emotion: PetEmotion) = avatarView?.playExpression(emotion)
     fun resetExpression()                   = avatarView?.resetExpression()
     fun loadAvatar(path: String)            = avatarView?.loadModelFromPath(path)
