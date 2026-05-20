@@ -3,6 +3,8 @@ package com.android.exe.rendering
 import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import android.webkit.*
@@ -25,6 +27,17 @@ class AvatarWebView(context: Context) : WebView(context) {
     var listener: Listener? = null
     private var pendingModelUri: String? = null   // stores a data-URI if renderer not ready yet
     private var rendererReady  = false
+
+    // Guard timer: if JS never calls onRendererReady() within 8 s (e.g. because
+    // an ES module failed to parse or a file is missing from assets), we fire it
+    // ourselves so the overlay stops blocking that screen corner.
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val readyGuard  = Runnable {
+        if (!rendererReady) {
+            Log.w(TAG, "Ready guard fired — JS never called onRendererReady. Unblocking overlay.")
+            markReady()
+        }
+    }
 
     init {
         settings.apply {
@@ -70,6 +83,9 @@ class AvatarWebView(context: Context) : WebView(context) {
         }
 
         loadUrl("file:///android_asset/avatar_renderer.html")
+
+        // Start the 8-second guard. Canceled in markReady() if JS responds in time.
+        mainHandler.postDelayed(readyGuard, 8_000L)
     }
 
     // ── JS → Kotlin bridge ────────────────────────────────────────────────────
@@ -77,17 +93,8 @@ class AvatarWebView(context: Context) : WebView(context) {
     inner class AndroidBridge {
         @JavascriptInterface
         fun onRendererReady() {
-            Log.i(TAG, "Renderer ready")
-            post {
-                rendererReady = true
-                listener?.onRendererReady()
-                // Deliver any model that was queued before the renderer was up
-                pendingModelUri?.let { uri ->
-                    pendingModelUri = null
-                    Log.d(TAG, "Delivering queued model to renderer")
-                    evaluateJavascript("AvatarAPI.loadModel('$uri');", null)
-                }
-            }
+            Log.i(TAG, "Renderer ready (JS callback)")
+            post { markReady() }
         }
 
         @JavascriptInterface
@@ -156,13 +163,25 @@ class AvatarWebView(context: Context) : WebView(context) {
         }.start()
     }
 
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
     /**
-     * Either sends the model data-URI to JS immediately (if renderer is ready)
-     * or queues it so onRendererReady() delivers it once the page is initialised.
-     *
-     * Previously this had a Kotlin null.also{} bug that set pendingModelPath = null
-     * and then immediately called evaluateJavascript before the renderer was ready.
+     * Single place that transitions rendererReady → true.
+     * Called either by the JS bridge (happy path) or by readyGuard (timeout).
+     * Must always run on the main thread.
      */
+    private fun markReady() {
+        mainHandler.removeCallbacks(readyGuard)   // cancel guard if JS fired it
+        if (rendererReady) return                 // idempotent
+        rendererReady = true
+        listener?.onRendererReady()
+        pendingModelUri?.let { uri ->
+            pendingModelUri = null
+            Log.d(TAG, "Delivering queued model to renderer")
+            evaluateJavascript("AvatarAPI.loadModel('$uri');", null)
+        }
+    }
+
     private fun dispatchModelUri(dataUri: String) {
         if (rendererReady) {
             evaluateJavascript("AvatarAPI.loadModel('$dataUri');", null)
