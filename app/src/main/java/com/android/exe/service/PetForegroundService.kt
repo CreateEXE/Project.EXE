@@ -11,7 +11,6 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.android.exe.R
 import com.android.exe.data.PetDatabase
 import com.android.exe.overlay.PetOverlayManager
 import com.android.exe.util.PetFileManager
@@ -20,6 +19,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 class PetForegroundService : Service() {
 
@@ -28,18 +30,16 @@ class PetForegroundService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "pet_channel"
 
-        const val ACTION_START          = "com.android.exe.action.START"
-        const val ACTION_STOP           = "com.android.exe.action.STOP"
-        const val ACTION_RELOAD_AVATAR  = "com.android.exe.action.RELOAD_AVATAR"
-        const val EXTRA_AVATAR_URI      = "avatar_uri"
-        const val EXTRA_MODEL_URI       = "model_uri"
+        const val ACTION_START         = "com.android.exe.action.START"
+        const val ACTION_STOP          = "com.android.exe.action.STOP"
+        const val ACTION_RELOAD_AVATAR = "com.android.exe.action.RELOAD_AVATAR"
+        const val EXTRA_AVATAR_URI     = "avatar_uri"
+        const val EXTRA_MODEL_URI      = "model_uri"
     }
 
     private var overlayManager: PetOverlayManager? = null
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val db by lazy { PetDatabase.getInstance(this) }
-
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
@@ -49,42 +49,55 @@ class PetForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "onStartCommand action=${intent?.action}")
-
-        // Always post the foreground notification immediately
         startForeground(NOTIFICATION_ID, buildNotification())
 
         when (intent?.action) {
             ACTION_START -> {
-                // Extra URIs from the old simple MainActivity (SetupActivity path)
                 val avatarUriStr = intent.getStringExtra(EXTRA_AVATAR_URI)
                 val modelUriStr  = intent.getStringExtra(EXTRA_MODEL_URI)
-                if (!avatarUriStr.isNullOrBlank() || !modelUriStr.isNullOrBlank()) {
-                    // Persist into DB then start overlay
-                    scope.launch {
-                        persistUrisToDb(avatarUriStr, modelUriStr)
-                        startOverlayFromDb()
+
+                scope.launch {
+                    // Try to resolve an avatar file path by any means available
+                    val avatarPath = resolveAvatarPath(avatarUriStr)
+                    Log.d(TAG, "Resolved avatarPath=$avatarPath")
+
+                    // Persist to DB in background (best-effort, don't block startup)
+                    if (avatarPath != null) {
+                        try {
+                            val profile = db.petProfileDao().getActive()
+                            if (profile != null) db.petProfileDao().setAvatarPath(profile.id, avatarPath)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not persist avatar path to DB", e)
+                        }
                     }
-                } else {
-                    // Started without extras — read paths from DB (normal path)
-                    scope.launch { startOverlayFromDb() }
+                    if (!modelUriStr.isNullOrBlank()) {
+                        try {
+                            val profile = db.petProfileDao().getActive()
+                            if (profile != null) {
+                                val mPath = copyUriToCache(Uri.parse(modelUriStr), "model.gguf")
+                                if (mPath != null) db.petProfileDao().setModelPath(profile.id, mPath)
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not persist model path to DB", e)
+                        }
+                    }
+
+                    startOverlay(avatarPath)
                 }
             }
 
             ACTION_RELOAD_AVATAR -> {
-                Log.d(TAG, "Reloading avatar from DB")
                 scope.launch {
-                    val profile = db.petProfileDao().getActive()
-                    val path = profile?.avatarPath
+                    val path = db.petProfileDao().getActive()?.avatarPath
                     if (!path.isNullOrBlank()) {
                         overlayManager?.loadAvatar(path)
                     } else {
-                        Log.w(TAG, "RELOAD_AVATAR: no avatar path in DB")
+                        Log.w(TAG, "RELOAD_AVATAR: no path in DB")
                     }
                 }
             }
 
             ACTION_STOP, null -> {
-                Log.d(TAG, "Stopping service")
                 stopOverlay()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -103,62 +116,68 @@ class PetForegroundService : Service() {
         super.onDestroy()
     }
 
+    // ── Path resolution — tries multiple strategies ───────────────────────────
+
+    private suspend fun resolveAvatarPath(uriStr: String?): String? {
+        // 1. Try the URI from the intent (copy content:// to cache)
+        if (!uriStr.isNullOrBlank()) {
+            val path = copyUriToCache(Uri.parse(uriStr), "avatar.vrm")
+            if (path != null) return path
+            Log.w(TAG, "URI copy failed for: $uriStr")
+        }
+
+        // 2. Fall back to path already stored in DB
+        val dbPath = db.petProfileDao().getActive()?.avatarPath
+        if (!dbPath.isNullOrBlank() && File(dbPath).exists()) {
+            Log.d(TAG, "Using DB avatar path: $dbPath")
+            return dbPath
+        }
+
+        // 3. Fall back to the standard file location PetFileManager uses
+        val stdFile = File(filesDir, "avatar.vrm")
+        if (stdFile.exists()) {
+            Log.d(TAG, "Using standard avatar.vrm from filesDir")
+            return stdFile.absolutePath
+        }
+
+        Log.w(TAG, "No avatar path could be resolved")
+        return null
+    }
+
+    /**
+     * Copy a content:// (or file://) URI to app cache and return the path.
+     * Must be called on a background dispatcher.
+     */
+    private suspend fun copyUriToCache(uri: Uri, fileName: String): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                val dest = File(cacheDir, fileName)
+                val input = contentResolver.openInputStream(uri)
+                    ?: return@withContext null
+                FileOutputStream(dest).use { out -> input.use { it.copyTo(out) } }
+                Log.d(TAG, "Copied $uri → ${dest.absolutePath} (${dest.length()} bytes)")
+                dest.absolutePath
+            } catch (e: Exception) {
+                Log.e(TAG, "copyUriToCache failed for $uri", e)
+                null
+            }
+        }
+
     // ── Overlay management ────────────────────────────────────────────────────
 
-    private suspend fun startOverlayFromDb() {
+    private fun startOverlay(avatarPath: String?) {
         if (overlayManager != null) {
             Log.w(TAG, "Overlay already running")
             return
         }
-        val profile = db.petProfileDao().getActive()
-        val avatarPath = profile?.avatarPath
-        Log.d(TAG, "Starting overlay. avatarPath=$avatarPath")
+        Log.d(TAG, "startOverlay avatarPath=$avatarPath")
         overlayManager = PetOverlayManager(this)
         overlayManager!!.attach(avatarPath)
     }
 
     private fun stopOverlay() {
-        try {
-            overlayManager?.detach()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error detaching overlay", e)
-        }
+        try { overlayManager?.detach() } catch (e: Exception) { Log.e(TAG, "detach error", e) }
         overlayManager = null
-    }
-
-    // ── Persist content:// URIs to app-private storage and DB ─────────────────
-
-    private suspend fun persistUrisToDb(avatarUriStr: String?, modelUriStr: String?) {
-        val profile = db.petProfileDao().getActive() ?: run {
-            Log.e(TAG, "No active pet profile — cannot persist URIs")
-            return
-        }
-
-        if (!avatarUriStr.isNullOrBlank()) {
-            try {
-                val uri  = Uri.parse(avatarUriStr)
-                val path = PetFileManager.importFile(this, uri, "avatar.vrm")
-                if (path != null) {
-                    db.petProfileDao().setAvatarPath(profile.id, path)
-                    Log.d(TAG, "Avatar persisted to $path")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to persist avatar URI", e)
-            }
-        }
-
-        if (!modelUriStr.isNullOrBlank()) {
-            try {
-                val uri  = Uri.parse(modelUriStr)
-                val path = PetFileManager.importFile(this, uri, "model.gguf")
-                if (path != null) {
-                    db.petProfileDao().setModelPath(profile.id, path)
-                    Log.d(TAG, "Model persisted to $path")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to persist model URI", e)
-            }
-        }
     }
 
     // ── Notification ──────────────────────────────────────────────────────────
@@ -189,14 +208,8 @@ class PetForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "Pet Companion",
-                    NotificationManager.IMPORTANCE_LOW
-                ).apply {
-                    description = "Keeps your AI pet running"
-                    setShowBadge(false)
-                }
+                NotificationChannel(CHANNEL_ID, "Pet Companion", NotificationManager.IMPORTANCE_LOW)
+                    .apply { setShowBadge(false) }
             )
         }
     }
