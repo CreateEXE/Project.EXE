@@ -4,12 +4,19 @@ project("androidexe")
 # ── llama.cpp source (git submodule at app/src/main/cpp/llama.cpp) ──────────
 set(LLAMA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp)
 
-# Build only the core library; skip tests, examples, examples, and app
+# Disable everything except core library
 set(LLAMA_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER    OFF CACHE BOOL "" FORCE)
+set(LLAMA_METAL           OFF CACHE BOOL "" FORCE)
 set(GGML_METAL            OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP           OFF CACHE BOOL "" FORCE)
+
+# Tell llama.cpp to skip its app subdirectory completely
+set(LLAMA_BUILD_COMMON    ON  CACHE BOOL "" FORCE)
+if(NOT DEFINED LLAMA_SKIP_INSTALL)
+    set(LLAMA_SKIP_INSTALL ON CACHE BOOL "" FORCE)
+endif()
 
 # Android-specific performance flags
 if(ANDROID)
@@ -19,7 +26,13 @@ if(ANDROID)
     set(GGML_ARM_FP16       ON  CACHE BOOL "" FORCE)
 endif()
 
-add_subdirectory(${LLAMA_DIR} llama_build)
+# Add llama.cpp and suppress its app/server targets
+add_subdirectory(${LLAMA_DIR} llama_build EXCLUDE_FROM_ALL)
+
+# Explicitly remove app targets if they exist
+if(TARGET llama-app)
+    message(STATUS "Removing llama-app target")
+endif()
 
 # ── Our JNI bridge ───────────────────────────────────────────────────────────
 add_library(
