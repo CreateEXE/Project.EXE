@@ -4,16 +4,17 @@ project("androidexe")
 # ── llama.cpp source (git submodule at app/src/main/cpp/llama.cpp) ──────────
 set(LLAMA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp)
 
-# Build only the core library; skip tests, examples, and metal
+# Build only the core library; skip tests, examples, examples, and app
 set(LLAMA_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER    OFF CACHE BOOL "" FORCE)
 set(GGML_METAL            OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP           OFF CACHE BOOL "" FORCE)
 
 # Android-specific performance flags
 if(ANDROID)
     set(GGML_ANDROID        ON  CACHE BOOL "" FORCE)
-    set(GGML_VULKAN         OFF CACHE BOOL "" FORCE)   # flip ON if you want Vulkan compute
+    set(GGML_VULKAN         OFF CACHE BOOL "" FORCE)
     set(GGML_NEON           ON  CACHE BOOL "" FORCE)
     set(GGML_ARM_FP16       ON  CACHE BOOL "" FORCE)
 endif()
