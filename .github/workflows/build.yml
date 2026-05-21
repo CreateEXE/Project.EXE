@@ -2,33 +2,29 @@ name: Build APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
-
-# Use Node.js 24 to suppress the deprecation warnings on all actions
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    branches: [ main ]
 
 jobs:
   build:
-    name: build
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Checkout ───────────────────────────────────────────────────────
+      # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: false   # llama.cpp cloned separately below (faster, shallow)
 
-      # ── 2. Clone llama.cpp (shallow) ──────────────────────────────────────
+      # ── 2. Clone llama.cpp (shallow) ───────────────────────────────────────
       - name: Clone llama.cpp
         run: |
           git clone --depth=1 \
             https://github.com/ggml-org/llama.cpp \
             app/src/main/cpp/llama.cpp
+          # Remove the app example to prevent build-info.h compilation error
+          rm -rf app/src/main/cpp/llama.cpp/app
 
       # ── 3. Java 17 ────────────────────────────────────────────────────────
       - name: Set up JDK 17
@@ -39,81 +35,31 @@ jobs:
           cache: gradle
 
       # ── 4. Gradle 8.6 ─────────────────────────────────────────────────────
-      - name: Set up Gradle 8.6
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.6'
+      - name: Set executable permissions
+        run: chmod +x ./gradlew
 
-      # ── 5. Android SDK ────────────────────────────────────────────────────
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      # ── 6. NDK 26 + CMake 3.22 ────────────────────────────────────────────
-      - name: Install NDK 26 and CMake 3.22
-        run: |
-          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          echo "y" | "$SDKMANAGER" \
-            "ndk;26.3.11579264" \
-            "cmake;3.22.1" \
-            "build-tools;34.0.0" \
-            "platforms;android-34"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
-
-      # ── 7. Accept SDK licenses ────────────────────────────────────────────
-      - name: Accept licenses
-        run: |
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses || true
-
-      # ── 8. Bundle JS libraries into assets (offline renderer) ─────────────
-      #
-      # Uses npm install instead of curl to avoid CDN 404s.
-      # Versions:
-      #   three@0.164.1 — satisfies @pixiv/three-vrm@2.1.2 peer dep ^0.164.1
-      #                   (three@0.165.0 violates the semver range ^0.164.x)
-      #   @pixiv/three-vrm@2.1.2 — VRM 0.x and 1.0 support, ESM module build
-      #
-      - name: Bundle JS libraries into assets
-        run: |
-          mkdir -p app/src/main/assets/js
-          npm install --prefix /tmp/npm-js \
-            three@0.164.1 \
-            @pixiv/three-vrm@2.1.2
-          NPM=/tmp/npm-js/node_modules
-          cp "$NPM/three/build/three.module.js"                           app/src/main/assets/js/three.module.js
-          cp "$NPM/@pixiv/three-vrm/lib/three-vrm.module.min.js"         app/src/main/assets/js/three-vrm.module.min.js
-          cp "$NPM/three/examples/jsm/loaders/GLTFLoader.js"             app/src/main/assets/js/GLTFLoader.js
-          cp "$NPM/three/examples/jsm/controls/OrbitControls.js"         app/src/main/assets/js/OrbitControls.js
-          echo "Bundled JS assets:"; ls -lh app/src/main/assets/js/
-
-      # ── 9. Generate gradlew + wrapper jar ────────────────────────────────
-      #
-      # gradlew and gradle-wrapper.jar are binary/generated files that are
-      # gitignored and not committed to the repo.
-      # setup-gradle@v4 above provisioned a real Gradle 8.6 installation.
-      # We use that binary to regenerate both files in-place.
-      #
-      - name: Generate gradle wrapper
-        run: |
-          GRADLE_BIN=$(find /home/runner/work/_temp/.gradle-actions/gradle-installations/installs \
-            -name "gradle" -type f 2>/dev/null | head -1)
-          echo "Gradle binary: $GRADLE_BIN"
-          "$GRADLE_BIN" wrapper --gradle-version 8.6 --distribution-type bin
-          chmod +x gradlew
-          ls -lh gradlew gradle/wrapper/gradle-wrapper.jar
-
-      # ── 10. Build debug APK ───────────────────────────────────────────────
+      # ── 5. Build Debug APK ─────────────────────────────────────────────────
       - name: Build debug APK
-        run: |
-          ./gradlew assembleDebug \
-            -Pandroid.ndkVersion=26.3.11579264 \
-            --stacktrace \
-            --no-daemon
+        run: ./gradlew assembleDebug
 
-      # ── 11. Upload APK ────────────────────────────────────────────────────
-      - name: Upload APK
+      # ── 6. Upload APK artifact ─────────────────────────────────────────────
+      - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: android-exe-debug-${{ github.sha }}
+          name: app-debug.apk
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
+
+      # ── 7. Comment on PR with download link ────────────────────────────────
+      - name: Comment APK link on PR
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Build successful! Download APK from [Actions artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})'
+            })
