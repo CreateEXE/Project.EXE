@@ -32,6 +32,7 @@ class PetOverlayManager(private val context: Context) {
     var avatarView: AvatarWebView? = null
         private set
     private var speechBubble: TextView? = null
+    private var debugPanel: DebugPanelView? = null      // NEW: debug display
 
     // ── Async jobs ─────────────────────────────────────────────────────────────
     private var bubbleJob: Job? = null
@@ -46,26 +47,66 @@ class PetOverlayManager(private val context: Context) {
     private var initialY = 0
 
     // ─────────────────────────────────────────────────────────────────────────
-    // attach()
-    //
-    // MUST run on the main thread — WebView's constructor calls
-    //   new Handler(Looper.myLooper(), ...)  internally.
-    // If myLooper() is null (any non-Looper thread) Android throws:
-    //   "Attempt to read from field 'MessageQueue Looper.mQueue' on null"
-    //
-    // Touch-blocking fix:
-    //   A plain FrameLayout with setOnTouchListener does NOT intercept
-    //   touches from its children. The WebView (a Chromium SurfaceView
-    //   internally) consumes every MotionEvent before the parent listener
-    //   ever fires. We override onInterceptTouchEvent() to return true so
-    //   the FrameLayout claims all touches first, then the setOnTouchListener
-    //   receives them correctly.
-    //
-    // FLAG fixes:
-    //   FLAG_LAYOUT_NO_LIMITS  — removed; it extends the window's touchable
-    //                            area far beyond the visible overlay bounds.
-    //   FLAG_TRANSLUCENT_STATUS — removed; not needed, causes rendering issues
-    //                             on some ROMs.
+    // Custom debug panel view
+    // ─────────────────────────────────────────────────────────────────────────
+    private inner class DebugPanelView(context: Context) : View(context) {
+        private val debugLines = mutableListOf<String>()
+        private val maxLines = 8
+        private val paint = android.graphics.Paint().apply {
+            color = Color.GREEN
+            textSize = 28f  // 10sp in pixels
+            typeface = android.graphics.Typeface.MONOSPACE
+        }
+        private val bgPaint = android.graphics.Paint().apply {
+            color = Color.argb(200, 0, 0, 0)  // semi-transparent black
+        }
+        private val borderPaint = android.graphics.Paint().apply {
+            color = Color.GREEN
+            strokeWidth = 2f
+            style = android.graphics.Paint.Style.STROKE
+        }
+
+        fun addLine(msg: String) {
+            debugLines.add(msg)
+            if (debugLines.size > maxLines) debugLines.removeAt(0)
+            invalidate()
+        }
+
+        fun clear() {
+            debugLines.clear()
+            invalidate()
+        }
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            super.onDraw(canvas)
+            
+            val w = width.toFloat()
+            val h = height.toFloat()
+            
+            // Background
+            canvas.drawRect(0f, 0f, w, h, bgPaint)
+            // Border
+            canvas.drawRect(0f, 0f, w, h, borderPaint)
+            
+            // Text
+            var y = 20f
+            for (line in debugLines) {
+                canvas.drawText(line, 8f, y, paint)
+                y += 20f
+            }
+        }
+    }
+
+    fun addDebugLine(msg: String) {
+        debugPanel?.addLine(msg)
+    }
+
+    fun clearDebugPanel() {
+        debugPanel?.clear()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // attach() - Creates overlay with avatar view and debug panel
     // ─────────────────────────────────────────────────────────────────────────
     fun attach(avatarPath: String?) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
@@ -84,10 +125,6 @@ class PetOverlayManager(private val context: Context) {
             else
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE,
-            // FLAG_NOT_FOCUSABLE  — window never takes keyboard focus
-            // FLAG_NOT_TOUCH_MODAL — touches outside window bounds go to
-            //                        the app/window behind us
-            // Do NOT add FLAG_LAYOUT_NO_LIMITS or FLAG_TRANSLUCENT_STATUS
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
@@ -97,25 +134,54 @@ class PetOverlayManager(private val context: Context) {
             y = 120
         }
 
-        // ── Root container: anonymous subclass that intercepts ALL touches ──
-        // Without this override, the WebView child eats every MotionEvent
-        // before the parent's onTouchListener sees it, making the overlay
-        // impossible to drag and blocking the screen area for other apps.
+        // ── Root container ──
         val root = object : FrameLayout(context) {
             override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true
         }.also { overlayRoot = it }
         root.setBackgroundColor(Color.TRANSPARENT)
 
-        // ── Avatar WebView — safe: confirmed on main thread ─────────────────
+        // ── Avatar WebView ──
         val avw = AvatarWebView(context).also { avatarView = it }
         avw.setBackgroundColor(Color.TRANSPARENT)
         avw.background?.alpha = 0
+        
+        // Listen for debug messages
+        avw.listener = object : AvatarWebView.Listener {
+            override fun onRendererReady() {
+                addDebugLine("✅ READY")
+            }
+            override fun onModelLoaded(name: String) {
+                addDebugLine("✅ Model OK")
+            }
+            override fun onModelError(error: String) {
+                addDebugLine("❌ ${error.take(15)}")
+            }
+            override fun onDebugMessage(msg: String) {
+                // Truncate long messages
+                val short = msg.take(20)
+                addDebugLine(short)
+            }
+        }
+        
         root.addView(avw, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
-        // ── Speech bubble ────────────────────────────────────────────────────
+        // ── Debug Panel (top-left corner, semi-transparent) ──
+        val debugView = DebugPanelView(context).also { debugPanel = it }
+        root.addView(debugView, FrameLayout.LayoutParams(
+            250,  // width
+            180,  // height
+            Gravity.TOP or Gravity.START
+        ).also { 
+            it.leftMargin = 4
+            it.topMargin = 4
+        })
+        
+        addDebugLine("🎬 INIT")
+
+        // ── Speech bubble ────
         val bubble = TextView(context).apply {
             visibility = View.GONE
             setTextColor(Color.WHITE)
@@ -130,7 +196,7 @@ class PetOverlayManager(private val context: Context) {
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).also { it.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL })
 
-        // ── Double-tap to cycle size ─────────────────────────────────────────
+        // ── Gestures ─────────
         val gestureDetector = GestureDetector(context,
             object : GestureDetector.SimpleOnGestureListener() {
                 override fun onDoubleTap(e: MotionEvent): Boolean {
@@ -138,9 +204,7 @@ class PetOverlayManager(private val context: Context) {
                 }
             })
 
-        // ── Touch: drag to move, single tap to interact ──────────────────────
-        // onInterceptTouchEvent (above) guarantees this listener receives
-        // events instead of the WebView child.
+        // ── Touch listener ────
         root.setOnTouchListener { v, event ->
             gestureDetector.onTouchEvent(event)
             when (event.action) {
@@ -167,10 +231,16 @@ class PetOverlayManager(private val context: Context) {
         }
 
         wm.addView(root, params)
-        Log.i(TAG, "Overlay attached (${w}×${h}px)")
+        Log.i(TAG, "✅ Overlay attached (${w}×${h}px) with debug panel")
+        addDebugLine("✅ OVERLAY UP")
 
         if (!avatarPath.isNullOrBlank()) {
+            Log.d(TAG, "Loading avatar: $avatarPath")
+            addDebugLine("→ LOAD")
             avw.loadModelFromPath(avatarPath)
+        } else {
+            Log.w(TAG, "No avatar path provided")
+            addDebugLine("⚠️  No path")
         }
     }
 
@@ -187,6 +257,7 @@ class PetOverlayManager(private val context: Context) {
         avatarView   = null
         overlayRoot  = null
         speechBubble = null
+        debugPanel   = null
         scope.cancel()
         Log.i(TAG, "Overlay detached")
     }
@@ -214,7 +285,7 @@ class PetOverlayManager(private val context: Context) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Size cycling  (double-tap)
+    // Size cycling (double-tap)
     // ─────────────────────────────────────────────────────────────────────────
     private var sizeMode = 0
 
@@ -233,16 +304,48 @@ class PetOverlayManager(private val context: Context) {
             }
         }
         when (sizeMode) {
-            1    -> avatarView?.setFraming("full")
-            2    -> avatarView?.setFraming("face")
-            else -> avatarView?.setFraming("bust")
+            1    -> {
+                avatarView?.setFraming("full")
+                addDebugLine("FULL")
+            }
+            2    -> {
+                avatarView?.setFraming("face")
+                addDebugLine("FACE")
+            }
+            else -> {
+                avatarView?.setFraming("bust")
+                addDebugLine("BUST")
+            }
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Delegated avatar controls
     // ─────────────────────────────────────────────────────────────────────────
-    fun playExpression(emotion: PetEmotion) = avatarView?.playExpression(emotion)
-    fun resetExpression()                   = avatarView?.resetExpression()
-    fun loadAvatar(path: String)            = avatarView?.loadModelFromPath(path)
+    fun playExpression(emotion: PetEmotion) {
+        addDebugLine("EXPR: ${emotion.vrmExpression}")
+        avatarView?.playExpression(emotion)
+    }
+    
+    fun resetExpression() {
+        addDebugLine("RESET")
+        avatarView?.resetExpression()
+    }
+    
+    fun loadAvatar(path: String) {
+        addDebugLine("LOAD: ${path.substringAfterLast("/").take(12)}")
+        avatarView?.loadModelFromPath(path)
+    }
+
+    fun sayLlmThinking() {
+        addDebugLine("🤔 LLM...")
+    }
+
+    fun sayLlmDone() {
+        addDebugLine("✅ LLM OK")
+    }
+
+    fun sayLlmError(error: String) {
+        addDebugLine("❌ LLM ERR")
+    }
 }
