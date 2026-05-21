@@ -1,18 +1,16 @@
 package com.android.exe.rendering
 
 import android.annotation.SuppressLint
-import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
-import android.util.Base64
 import android.util.Log
 import android.webkit.*
 import com.android.exe.ai.PetEmotion
 import java.io.File
 
 @SuppressLint("SetJavaScriptEnabled", "ViewConstructor")
-class AvatarWebView(context: Context) : WebView(context) {
+class AvatarWebView(context: android.content.Context) : WebView(context) {
 
     companion object {
         private const val TAG = "AvatarWebView"
@@ -22,20 +20,20 @@ class AvatarWebView(context: Context) : WebView(context) {
         fun onRendererReady()
         fun onModelLoaded(name: String)
         fun onModelError(error: String)
-        fun onDebugMessage(msg: String)  // NEW: for debug callbacks
+        fun onDebugMessage(msg: String)
     }
 
     var listener: Listener? = null
-    private var pendingModelUri: String? = null
-    private var rendererReady  = false
+    private var pendingModelUrl: String? = null
+    private var rendererReady   = false
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Guard timer: if JS never calls onRendererReady() within 10s, unblock
-    // ─────────────────────────────────────────────────────────────────────────
+    // One server per WebView lifetime — stopped in destroy()
+    private var fileServer: LocalFileServer? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val readyGuard  = Runnable {
         if (!rendererReady) {
-            Log.w(TAG, "⚠ Ready guard FIRED — JS never called onRendererReady. Unblocking overlay. This suggests a module loading failure.")
+            Log.w(TAG, "Ready guard fired — JS never called onRendererReady. Unblocking.")
             markReady()
         }
     }
@@ -64,201 +62,135 @@ class AvatarWebView(context: Context) : WebView(context) {
             override fun onReceivedError(
                 view: WebView?, request: WebResourceRequest?, error: WebResourceError?
             ) {
-                val msg = "WebView resource error: ${error?.description} url=${request?.url}"
-                Log.e(TAG, "❌ $msg")
-                listener?.onDebugMessage("❌ Resource load failed: ${request?.url}")
+                val msg = "Resource error: ${error?.description} url=${request?.url}"
+                Log.e(TAG, msg)
+                listener?.onDebugMessage("❌ $msg")
             }
-            
             override fun onPageFinished(view: WebView?, url: String?) {
-                Log.d(TAG, "✓ Page finished: $url")
-                listener?.onDebugMessage("✓ Page loaded: $url")
-            }
-            
-            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                Log.d(TAG, "→ Page starting: $url")
-                listener?.onDebugMessage("→ Loading: $url")
+                Log.d(TAG, "Page finished: $url")
+                listener?.onDebugMessage("✓ Page loaded")
             }
         }
 
         webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
                 val text = msg?.message() ?: return false
-                val prefix = when (msg.messageLevel()) {
-                    ConsoleMessage.MessageLevel.ERROR   -> { Log.e(TAG, "JS ERROR: $text"); "❌ JS:" }
-                    ConsoleMessage.MessageLevel.WARNING -> { Log.w(TAG, "JS WARN: $text"); "⚠ JS:" }
-                    else                                -> { Log.d(TAG, "JS LOG: $text"); "ℹ JS:" }
+                val level = msg.messageLevel()
+                when (level) {
+                    ConsoleMessage.MessageLevel.ERROR   -> Log.e(TAG, "JS: $text")
+                    ConsoleMessage.MessageLevel.WARNING -> Log.w(TAG, "JS: $text")
+                    else                                -> Log.d(TAG, "JS: $text")
                 }
-                listener?.onDebugMessage("$prefix $text")
+                listener?.onDebugMessage(text.take(60))
                 return true
             }
         }
 
-        Log.i(TAG, "🚀 AvatarWebView initializing...")
-        listener?.onDebugMessage("🚀 Initializing WebView")
-        
         loadUrl("file:///android_asset/avatar_renderer.html")
-
-        // 10-second guard timer
         mainHandler.postDelayed(readyGuard, 10_000L)
-        Log.d(TAG, "Guard timer set: 10 seconds")
-        listener?.onDebugMessage("⏱ Guard timer: 10s")
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // JS → Kotlin bridge (all methods receive debug tracking)
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── JS → Kotlin bridge ────────────────────────────────────────────────────
 
     inner class AndroidBridge {
         @JavascriptInterface
         fun onRendererReady() {
-            Log.i(TAG, "✅ Renderer ready (JS callback)")
-            listener?.onDebugMessage("✅ Renderer READY from JS")
+            Log.i(TAG, "onRendererReady from JS")
+            listener?.onDebugMessage("✅ Renderer READY")
             post { markReady() }
         }
 
         @JavascriptInterface
         fun onModelLoaded(name: String) {
-            Log.i(TAG, "✅ Model loaded: $name")
-            listener?.onDebugMessage("✅ Model loaded: $name")
+            Log.i(TAG, "onModelLoaded: $name")
+            listener?.onDebugMessage("✅ Model: $name")
             post { listener?.onModelLoaded(name) }
         }
 
         @JavascriptInterface
         fun onModelError(error: String) {
-            Log.e(TAG, "❌ Model error: $error")
-            listener?.onDebugMessage("❌ Model ERROR: $error")
+            Log.e(TAG, "onModelError: $error")
+            listener?.onDebugMessage("❌ $error")
             post { listener?.onModelError(error) }
         }
-        
+
         @JavascriptInterface
         fun onDebugMessage(msg: String) {
-            Log.d(TAG, "🐛 Debug: $msg")
+            Log.d(TAG, "JS debug: $msg")
             post { listener?.onDebugMessage(msg) }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Kotlin → JS calls (with detailed logging)
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Public API ────────────────────────────────────────────────────────────
 
+    /**
+     * Load a model from a file path.
+     * Starts a local HTTP server so WebView fetches it over http://127.0.0.1
+     * instead of encoding it as a potentially-huge base64 data URI.
+     */
     fun loadModelFromPath(path: String) {
         val file = File(path)
-        if (!file.exists()) {
-            Log.e(TAG, "❌ File not found: $path")
-            listener?.onDebugMessage("❌ File not found: $path")
-            listener?.onModelError("File not found: $path")
+        if (!file.exists() || !file.canRead()) {
+            val err = "File not found or unreadable: $path"
+            Log.e(TAG, err)
+            listener?.onDebugMessage("❌ $err")
+            listener?.onModelError(err)
             return
         }
 
-        val fileSize = file.length() / 1024  // KB
-        Log.i(TAG, "📦 Loading model from path: $path ($fileSize KB)")
-        listener?.onDebugMessage("📦 Loading: ${file.name} ($fileSize KB)")
+        Log.i(TAG, "loadModelFromPath: ${file.name} (${file.length() / 1024} KB)")
+        listener?.onDebugMessage("📦 ${file.name} (${file.length() / 1024} KB)")
 
-        val mimeType = when {
-            path.endsWith(".vrm",  ignoreCase = true) -> "model/gltf-binary"
-            path.endsWith(".glb",  ignoreCase = true) -> "model/gltf-binary"
-            path.endsWith(".gltf", ignoreCase = true) -> "model/gltf+json"
-            else                                       -> "application/octet-stream"
-        }
+        // Stop any previous server
+        fileServer?.stop()
 
-        Thread {
-            try {
-                Log.d(TAG, "→ Reading file: ${file.name}")
-                listener?.onDebugMessage("→ Reading file...")
-                
-                val bytes = file.readBytes()
-                Log.d(TAG, "✓ File read: ${bytes.size / 1024} KB")
-                listener?.onDebugMessage("✓ Read: ${bytes.size / 1024} KB")
-                
-                Log.d(TAG, "→ Encoding to base64...")
-                listener?.onDebugMessage("→ Encoding base64...")
-                
-                val b64   = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                val uri   = "data:$mimeType;base64,$b64"
-                
-                Log.i(TAG, "✓ Encoded successfully. Dispatching to JS...")
-                listener?.onDebugMessage("✓ Dispatch to JS")
-                post { dispatchModelUri(uri) }
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ File read failed: ${e.message}", e)
-                listener?.onDebugMessage("❌ Read ERROR: ${e.message}")
-                post { listener?.onModelError(e.message ?: "Read error") }
-            }
-        }.start()
+        val server = LocalFileServer(file)
+        server.start()
+        fileServer = server
+
+        val url = server.url
+        Log.i(TAG, "Serving model at $url")
+        listener?.onDebugMessage("🌐 Serving on port ${server.port}")
+
+        dispatchModelUrl(url)
     }
 
+    /**
+     * Load a model from a content:// URI.
+     * Copies to cache first, then hands off to [loadModelFromPath].
+     */
     fun loadModelFromUri(uri: Uri) {
-        Log.i(TAG, "📦 Loading model from URI: $uri")
-        listener?.onDebugMessage("📦 Loading from URI...")
-        
+        Log.i(TAG, "loadModelFromUri: $uri")
+        listener?.onDebugMessage("📦 Copying from URI…")
         Thread {
             try {
-                Log.d(TAG, "→ Opening content resolver...")
-                val bytes = context.contentResolver.openInputStream(uri)
-                    ?.readBytes()
-                    ?: run {
-                        Log.e(TAG, "❌ Cannot open URI: $uri")
+                val ext = when {
+                    uri.path?.endsWith(".gltf", true) == true -> ".gltf"
+                    else -> ".glb"
+                }
+                val dest = File(context.cacheDir, "avatar_tmp$ext")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    dest.outputStream().use { input.copyTo(it) }
+                } ?: run {
+                    post {
+                        listener?.onModelError("Cannot open URI: $uri")
                         listener?.onDebugMessage("❌ Cannot open URI")
-                        post { listener?.onModelError("Cannot open Uri: $uri") }
-                        return@Thread
                     }
-                
-                Log.d(TAG, "✓ Read ${bytes.size / 1024} KB from URI")
-                listener?.onDebugMessage("✓ Read: ${bytes.size / 1024} KB")
-                
-                val mime = if (uri.path?.endsWith(".gltf", ignoreCase = true) == true)
-                    "model/gltf+json" else "model/gltf-binary"
-                    
-                Log.d(TAG, "→ Encoding to base64...")
-                val b64  = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                val data = "data:$mime;base64,$b64"
-                
-                Log.i(TAG, "✓ Encoded URI data. Dispatching to JS...")
-                listener?.onDebugMessage("✓ Dispatch URI to JS")
-                post { dispatchModelUri(data) }
+                    return@Thread
+                }
+                Log.d(TAG, "Copied URI to ${dest.absolutePath} (${dest.length()} bytes)")
+                post { loadModelFromPath(dest.absolutePath) }
             } catch (e: Exception) {
-                Log.e(TAG, "❌ loadModelFromUri failed: ${e.message}", e)
-                listener?.onDebugMessage("❌ URI load ERROR: ${e.message}")
-                post { listener?.onModelError(e.message ?: "Error") }
+                Log.e(TAG, "loadModelFromUri failed", e)
+                post {
+                    listener?.onModelError(e.message ?: "URI copy error")
+                    listener?.onDebugMessage("❌ URI error: ${e.message}")
+                }
             }
         }.start()
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Internal helpers
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private fun markReady() {
-        mainHandler.removeCallbacks(readyGuard)
-        if (rendererReady) return
-        rendererReady = true
-        Log.i(TAG, "🎉 Marked as READY")
-        listener?.onDebugMessage("🎉 WebView READY")
-        listener?.onRendererReady()
-        
-        pendingModelUri?.let { uri ->
-            pendingModelUri = null
-            Log.d(TAG, "→ Delivering queued model to renderer")
-            listener?.onDebugMessage("→ Loading queued model...")
-            evaluateJavascript("AvatarAPI.loadModel('$uri');", null)
-        }
-    }
-
-    private fun dispatchModelUri(dataUri: String) {
-        if (rendererReady) {
-            Log.d(TAG, "→ Dispatching model to renderer immediately")
-            listener?.onDebugMessage("→ Dispatching model...")
-            evaluateJavascript("AvatarAPI.loadModel('$dataUri');", null)
-        } else {
-            Log.d(TAG, "⏳ Renderer not ready — queuing model (waiting for JS boot)")
-            listener?.onDebugMessage("⏳ Queuing model (waiting for JS)")
-            pendingModelUri = dataUri
-        }
     }
 
     fun playExpression(emotion: PetEmotion) {
-        Log.d(TAG, "😊 Playing expression: ${emotion.vrmExpression} (${(emotion.weight*100).toInt()}%)")
-        listener?.onDebugMessage("😊 ${emotion.vrmExpression}")
         evaluateJavascript(
             "AvatarAPI.playExpression('${emotion.vrmExpression}',${emotion.weight},${emotion.durationSec});",
             null
@@ -266,18 +198,47 @@ class AvatarWebView(context: Context) : WebView(context) {
     }
 
     fun resetExpression() {
-        Log.d(TAG, "😐 Resetting expression")
-        listener?.onDebugMessage("😐 Reset")
         evaluateJavascript("AvatarAPI.resetExpression();", null)
     }
-    
+
     fun lookAt(x: Float, y: Float) {
         evaluateJavascript("AvatarAPI.lookAt($x,$y);", null)
     }
-    
+
     fun setFraming(mode: String) {
-        Log.d(TAG, "🎥 Setting framing: $mode")
-        listener?.onDebugMessage("🎥 $mode")
         evaluateJavascript("AvatarAPI.setFraming('$mode');", null)
+    }
+
+    override fun destroy() {
+        mainHandler.removeCallbacks(readyGuard)
+        fileServer?.stop()
+        fileServer = null
+        super.destroy()
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    private fun markReady() {
+        mainHandler.removeCallbacks(readyGuard)
+        if (rendererReady) return
+        rendererReady = true
+        Log.i(TAG, "Marked READY")
+        listener?.onRendererReady()
+        pendingModelUrl?.let { url ->
+            pendingModelUrl = null
+            Log.d(TAG, "Delivering queued model URL")
+            evaluateJavascript("AvatarAPI.loadModel('$url');", null)
+        }
+    }
+
+    private fun dispatchModelUrl(url: String) {
+        if (rendererReady) {
+            Log.d(TAG, "Dispatching model URL immediately: $url")
+            evaluateJavascript("AvatarAPI.loadModel('$url');", null)
+        } else {
+            Log.d(TAG, "Renderer not ready — queuing model URL")
+            listener?.onDebugMessage("⏳ Queued (waiting for JS)")
+            pendingModelUrl = url
+        }
     }
 }
