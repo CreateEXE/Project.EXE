@@ -42,6 +42,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        binding.btnStartStop.text = if (isServiceRunning()) "Stop Pet" else "Start Pet"
+        binding.tvOverlayStatus.text = if (isServiceRunning()) "Status: Running" else "Status: Stopped"
+    }
+
     private fun loadSavedDefaults() {
         val defaultAvatarUri = PreferencesManager.getDefaultAvatarUri(this)
         if (defaultAvatarUri != null) {
@@ -87,13 +93,15 @@ class MainActivity : AppCompatActivity() {
         try {
             binding.btnStartStop.setOnClickListener {
                 Log.d(TAG, "Start/Stop clicked")
-                if (selectedAvatarUri.isEmpty() || selectedModelUri.isEmpty()) {
-                    binding.textView.text = "Please select avatar and model first"
-                    return@setOnClickListener
+                if (isServiceRunning()) {
+                    stopPetServiceNow()
+                } else {
+                    if (selectedAvatarUri.isEmpty() || selectedModelUri.isEmpty()) {
+                        binding.textView.text = "Please select avatar and model first"
+                        return@setOnClickListener
+                    }
+                    startPetServiceNow()
                 }
-                binding.textView.text = "Pet service started!"
-                binding.tvOverlayStatus.text = "Status: Running"
-                startPetServiceNow()
             }
 
             binding.btnPickAvatar.setOnClickListener {
@@ -146,7 +154,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun startPetServiceNow() {
         Log.d(TAG, "Starting pet service")
-
         try {
             val serviceIntent = Intent(this, PetForegroundService::class.java).apply {
                 action = PetForegroundService.ACTION_START
@@ -160,11 +167,40 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
 
+            getSharedPreferences("service_state", MODE_PRIVATE).edit()
+                .putBoolean("running", true).apply()
+
+            binding.btnStartStop.text = "Stop Pet"
             binding.textView.text = "Pet is running!\nAvatar: ${binding.tvAvatarPath.text}\nModel: ${binding.tvModelPath.text}"
+            binding.tvOverlayStatus.text = "Status: Running"
         } catch (e: Exception) {
             Log.e(TAG, "Error starting pet service", e)
             binding.textView.text = "Error: ${e.message}"
         }
+    }
+
+    private fun stopPetServiceNow() {
+        Log.d(TAG, "Stopping pet service")
+        try {
+            val stopIntent = Intent(this, PetForegroundService::class.java).apply {
+                action = PetForegroundService.ACTION_STOP
+            }
+            startService(stopIntent)
+
+            getSharedPreferences("service_state", MODE_PRIVATE).edit()
+                .putBoolean("running", false).apply()
+
+            binding.btnStartStop.text = "Start Pet"
+            binding.tvOverlayStatus.text = "Status: Stopped"
+            binding.textView.text = "Android.EXE Ready"
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping pet service", e)
+        }
+    }
+
+    private fun isServiceRunning(): Boolean {
+        return getSharedPreferences("service_state", MODE_PRIVATE)
+            .getBoolean("running", false)
     }
 
     override fun onDestroy() {
