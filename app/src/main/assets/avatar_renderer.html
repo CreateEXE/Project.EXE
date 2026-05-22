@@ -26,159 +26,43 @@
     pointer-events: none;
     text-shadow: 0 1px 3px #000;
   }
-  #debug {
-    position: fixed;
-    top: 4px; right: 4px;
-    max-width: 200px;
-    max-height: 150px;
-    background: rgba(0,0,0,0.8);
-    color: #0f0;
-    font: 8px/1.2 monospace;
-    padding: 4px;
-    border: 1px solid #0f0;
-    overflow-y: auto;
-    pointer-events: none;
-    border-radius: 4px;
-    z-index: 9999;
-  }
-  .debug-line    { display: block; }
-  .debug-error   { color: #f00; }
-  .debug-success { color: #0f0; }
-  .debug-warning { color: #ff0; }
-  .debug-info    { color: #0ff; }
 </style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three":              "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+    "three/addons/":      "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/",
+    "@pixiv/three-vrm":   "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.2/lib/three-vrm.module.min.js"
+  }
+}
+</script>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="status">Loading…</div>
-<div id="debug"></div>
 
-<script>
-// ─────────────────────────────────────────────────────────────────────────────
-// Bootstrap: try local assets first, fall back to CDN.
-// This lets the app work both from the CI build (bundled JS) and from a
-// plain local Android Studio build (no bundled JS).
-// ─────────────────────────────────────────────────────────────────────────────
-(function () {
-  const debugEl  = document.getElementById('debug');
-  const statusEl = document.getElementById('status');
+<script type="module">
+// ─── Imports resolved by the static importmap above ───────────────────────────
+import * as THREE                        from 'three';
+import { GLTFLoader }                    from 'three/addons/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin, VRMUtils }     from '@pixiv/three-vrm';
 
-  function dbg(msg, type) {
-    type = type || 'info';
-    const s = document.createElement('span');
-    s.className = 'debug-line debug-' + type;
-    s.textContent = msg;
-    debugEl.appendChild(s);
-    debugEl.appendChild(document.createElement('br'));
-    // keep last 14 lines
-    while (debugEl.querySelectorAll('.debug-line').length > 14) {
-      debugEl.removeChild(debugEl.firstChild);
-      if (debugEl.firstChild && debugEl.firstChild.nodeName === 'BR')
-        debugEl.removeChild(debugEl.firstChild);
-    }
-    console.log('[' + type.toUpperCase() + '] ' + msg);
-  }
+// ─── Kotlin bridge helpers ────────────────────────────────────────────────────
+const statusEl = document.getElementById('status');
+function setStatus(msg) { statusEl.textContent = msg; }
 
-  function setStatus(msg) { statusEl.textContent = msg; }
+function notifyKotlin(method, arg) {
+  try { window.AndroidBridge[method](arg); } catch (_) {}
+}
 
-  function notifyKotlin(method, arg) {
-    try { window.AndroidBridge[method](arg); } catch(e) { dbg('Bridge miss:' + method, 'warning'); }
-  }
-
-  // ── Check if local JS assets exist ────────────────────────────────────────
-  const LOCAL_THREE   = './js/three.module.js';
-  const LOCAL_GLTF    = './js/GLTFLoader.js';
-  const LOCAL_VRM     = './js/three-vrm.module.min.js';
-
-  // CDN fallbacks (pinned versions matching CI)
-  const CDN_BASE      = 'https://cdn.jsdelivr.net/npm/';
-  const CDN_THREE     = CDN_BASE + 'three@0.164.1/build/three.module.js';
-  const CDN_GLTF      = CDN_BASE + 'three@0.164.1/examples/jsm/loaders/GLTFLoader.js';
-  const CDN_VRM       = CDN_BASE + '@pixiv/three-vrm@2.1.2/lib/three-vrm.module.min.js';
-
-  dbg('Boot: checking assets…', 'info');
-  setStatus('Loading modules…');
-
-  // Probe the local three.module.js with a HEAD request.
-  // If it 404s we know we need CDN; otherwise use local.
-  const probe = new XMLHttpRequest();
-  probe.open('HEAD', LOCAL_THREE, true);
-  probe.onreadystatechange = function () {
-    if (probe.readyState !== 4) return;
-    const useLocal = (probe.status === 200);
-    dbg(useLocal ? '✓ Local JS found' : '⚠ No local JS, using CDN', useLocal ? 'success' : 'warning');
-    injectImportMap(useLocal);
-  };
-  probe.onerror = function () {
-    dbg('⚠ Probe error, using CDN', 'warning');
-    injectImportMap(false);
-  };
-  probe.send();
-
-  function injectImportMap(local) {
-    const map = {
-      imports: {
-        'three':              local ? LOCAL_THREE : CDN_THREE,
-        'three/addons/':      local ? './js/'     : (CDN_BASE + 'three@0.164.1/examples/jsm/'),
-        '@pixiv/three-vrm':   local ? LOCAL_VRM   : CDN_VRM
-      }
-    };
-    const im = document.createElement('script');
-    im.type = 'importmap';
-    im.textContent = JSON.stringify(map);
-    document.head.appendChild(im);
-    dbg('Import map set (' + (local ? 'local' : 'CDN') + ')', 'info');
-
-    // Now load the main module
-    const ms = document.createElement('script');
-    ms.type = 'module';
-    ms.src  = local ? './js/main_renderer.js' : 'data:application/javascript,' + encodeURIComponent(INLINE_RENDERER);
-    // For simplicity we always use inline renderer (avoids needing a separate file)
-    ms.remove();
-    loadInlineRenderer(map.imports);
-  }
-
-  // ── Inline renderer (self-contained, no separate file needed) ─────────────
-  function loadInlineRenderer(imports) {
-    const blob = new Blob([buildRendererSrc(imports)], { type: 'application/javascript' });
-    const url  = URL.createObjectURL(blob);
-    const s    = document.createElement('script');
-    s.type     = 'module';
-    s.src      = url;
-    s.onerror  = function (e) { dbg('❌ Module load failed', 'error'); };
-    document.head.appendChild(s);
-    dbg('Renderer module injected', 'info');
-  }
-
-  window.__dbg         = dbg;
-  window.__setStatus   = setStatus;
-  window.__notifyKotlin = notifyKotlin;
-})();
-
-// ── Renderer source (returned as a string, executed as an ES module blob) ────
-function buildRendererSrc(imports) {
-  // We embed the THREE/VRM URLs directly so the module can import them
-  // without relying on the importmap (importmaps don't apply to blob: URLs
-  // in all WebView versions).
-  return `
-import * as THREE from '${imports["three"]}';
-import { GLTFLoader }   from '${imports["three/addons/"]}loaders/GLTFLoader.js';
-import { VRMLoaderPlugin, VRMUtils } from '${imports["@pixiv/three-vrm"]}';
-
-const dbg          = window.__dbg;
-const setStatus    = window.__setStatus;
-const notifyKotlin = window.__notifyKotlin;
-
-dbg('✓ THREE ' + THREE.REVISION, 'success');
-
-// ── Renderer ──────────────────────────────────────────────────────────────
+// ─── Renderer ─────────────────────────────────────────────────────────────────
 const canvas   = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 0);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-dbg('✓ WebGL ' + (renderer.capabilities.isWebGL2 ? '2' : '1'), 'success');
 
 const scene  = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 20);
@@ -186,37 +70,39 @@ let currentFraming = 'bust';
 setCameraFraming('bust');
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x8888aa, 0.8));
-const key = new THREE.DirectionalLight(0xfff5e0, 1.2);
-key.position.set(1.2, 2, 1.5);
-scene.add(key);
-const fill = new THREE.DirectionalLight(0xc0d8ff, 0.4);
-fill.position.set(-1.5, 1, -1);
-scene.add(fill);
+const keyLight = new THREE.DirectionalLight(0xfff5e0, 1.2);
+keyLight.position.set(1.2, 2, 1.5);
+scene.add(keyLight);
+const fillLight = new THREE.DirectionalLight(0xc0d8ff, 0.4);
+fillLight.position.set(-1.5, 1, -1);
+scene.add(fillLight);
 
-// ── Loader ────────────────────────────────────────────────────────────────
+// ─── Loader ───────────────────────────────────────────────────────────────────
 const loader = new GLTFLoader();
 loader.register(parser => new VRMLoaderPlugin(parser, { autoUpdateHumanBones: true }));
-dbg('✓ GLTFLoader ready', 'success');
 
-// ── State ─────────────────────────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────────────────────────
 let currentVRM   = null;
 let currentModel = null;
 const clock = new THREE.Clock();
-const idle  = { breathPhase:0, blinkTimer:0, nextBlink:3, blinkActive:false, blinkT:0 };
+const idle  = {
+  breathPhase: 0, blinkTimer: 0, nextBlink: 3,
+  blinkActive: false, blinkT: 0
+};
 let activeExpressionName   = null;
 let activeExpressionWeight = 0;
 
-// ── Public API ────────────────────────────────────────────────────────────
+// ─── Public API (called by Kotlin via evaluateJavascript) ─────────────────────
 window.AvatarAPI = {
 
   loadModel(url) {
-    dbg('loadModel: ' + url.substring(0,40), 'info');
     setStatus('Loading…');
 
     if (currentModel) {
       scene.remove(currentModel);
       if (currentVRM) VRMUtils.deepDispose(currentVRM.scene);
-      currentVRM = null; currentModel = null;
+      currentVRM = null;
+      currentModel = null;
     }
 
     loader.load(
@@ -225,7 +111,7 @@ window.AvatarAPI = {
         try {
           const vrm = gltf.userData.vrm;
           if (!vrm) {
-            dbg('Plain GLB (no VRM)', 'warning');
+            // Plain GLB without VRM metadata
             currentModel = gltf.scene;
             scene.add(currentModel);
             fitModel(currentModel);
@@ -233,28 +119,32 @@ window.AvatarAPI = {
             notifyKotlin('onModelLoaded', gltf.scene.name || 'model.glb');
             return;
           }
-          dbg('VRM detected', 'success');
           currentVRM   = vrm;
           currentModel = vrm.scene;
           VRMUtils.rotateVRM0(vrm);
           scene.add(currentModel);
-          Object.assign(idle, { breathPhase:0, blinkTimer:0, nextBlink:3, blinkActive:false, blinkT:0 });
-          activeExpressionName = null; activeExpressionWeight = 0;
+          Object.assign(idle, {
+            breathPhase: 0, blinkTimer: 0, nextBlink: 3,
+            blinkActive: false, blinkT: 0
+          });
+          activeExpressionName = null;
+          activeExpressionWeight = 0;
           setCameraFraming(currentFraming);
           setStatus('');
           const name = vrm.meta?.title || vrm.meta?.name || 'avatar.vrm';
-          dbg('✓ Loaded: ' + name, 'success');
           notifyKotlin('onModelLoaded', name);
-        } catch(e) {
-          dbg('❌ Callback err: ' + e.message, 'error');
+        } catch (e) {
           setStatus('Error: ' + e.message);
           notifyKotlin('onModelError', e.message);
         }
       },
-      xhr => { if (xhr.total) setStatus('Loading… ' + Math.round(xhr.loaded/xhr.total*100) + '%'); },
+      xhr => {
+        if (xhr.total) {
+          setStatus('Loading… ' + Math.round(xhr.loaded / xhr.total * 100) + '%');
+        }
+      },
       err => {
         const msg = err?.message || String(err);
-        dbg('❌ Load err: ' + msg, 'error');
         setStatus('Error: ' + msg);
         notifyKotlin('onModelError', msg);
       }
@@ -266,69 +156,89 @@ window.AvatarAPI = {
     activeExpressionName   = name;
     activeExpressionWeight = weight;
     if (durationSec > 0) {
-      setTimeout(() => { if (activeExpressionName === name) { activeExpressionName = null; activeExpressionWeight = 0; } }, durationSec * 1000);
+      setTimeout(() => {
+        if (activeExpressionName === name) {
+          activeExpressionName = null;
+          activeExpressionWeight = 0;
+        }
+      }, durationSec * 1000);
     }
   },
 
   resetExpression() {
-    activeExpressionName = null; activeExpressionWeight = 0;
+    activeExpressionName = null;
+    activeExpressionWeight = 0;
     if (!currentVRM?.expressionManager) return;
-    ['happy','angry','sad','surprised','relaxed','blink','blinkLeft','blinkRight','aa','ih','ou','ee','oh']
-      .forEach(n => { try { currentVRM.expressionManager.setValue(n, 0); } catch(_){} });
+    ['happy','angry','sad','surprised','relaxed',
+     'blink','blinkLeft','blinkRight','aa','ih','ou','ee','oh']
+      .forEach(n => { try { currentVRM.expressionManager.setValue(n, 0); } catch (_) {} });
   },
 
   lookAt(nx, ny) {
     if (!currentVRM?.lookAt) return;
-    currentVRM.lookAt.target = new THREE.Vector3((nx-0.5)*2, -(ny-0.5)*2+1.5, 2);
+    currentVRM.lookAt.target = new THREE.Vector3((nx - 0.5) * 2, -(ny - 0.5) * 2 + 1.5, 2);
   },
 
   setFraming(mode) { setCameraFraming(mode); }
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ─── Camera framing presets ───────────────────────────────────────────────────
 function setCameraFraming(mode) {
   currentFraming = mode;
-  if (mode === 'full')       { camera.position.set(0, 0.9,  3.2); camera.lookAt(0, 0.9,  0); }
-  else if (mode === 'face')  { camera.position.set(0, 1.55, 0.9); camera.lookAt(0, 1.55, 0); }
-  else                       { camera.position.set(0, 1.35, 1.8); camera.lookAt(0, 1.35, 0); }
+  if      (mode === 'full') { camera.position.set(0, 0.9,  3.2); camera.lookAt(0, 0.9,  0); }
+  else if (mode === 'face') { camera.position.set(0, 1.55, 0.9); camera.lookAt(0, 1.55, 0); }
+  else                      { camera.position.set(0, 1.35, 1.8); camera.lookAt(0, 1.35, 0); }
 }
 
 function fitModel(model) {
   const box    = new THREE.Box3().setFromObject(model);
   const centre = box.getCenter(new THREE.Vector3());
   const size   = box.getSize(new THREE.Vector3());
-  const dist   = Math.max(size.x, size.y, size.z) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov/2)));
+  const dist   = Math.max(size.x, size.y, size.z) /
+                 (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
   camera.position.set(centre.x, centre.y, centre.z + dist * 1.2);
   camera.lookAt(centre);
 }
 
+// ─── Resize ───────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+// ─── Idle animation ───────────────────────────────────────────────────────────
 function tickIdle(delta) {
   if (!currentVRM) return;
   const em = currentVRM.expressionManager;
   const hb = currentVRM.humanoid;
+
   idle.breathPhase += delta * 0.35;
   const b = Math.sin(idle.breathPhase * Math.PI * 2) * 0.025;
   if (hb) {
     applyBone(hb, 'spine', b, 0, 0);
-    applyBone(hb, 'chest', b*0.4, 0, 0);
-    applyBone(hb, 'head', Math.sin(idle.breathPhase*Math.PI*2*0.5)*0.012, Math.sin(idle.breathPhase*Math.PI*2*0.37)*0.008, 0);
+    applyBone(hb, 'chest', b * 0.4, 0, 0);
+    applyBone(hb, 'head',
+      Math.sin(idle.breathPhase * Math.PI * 2 * 0.5)  * 0.012,
+      Math.sin(idle.breathPhase * Math.PI * 2 * 0.37) * 0.008,
+      0
+    );
   }
   if (em) {
     idle.blinkTimer += delta;
     if (!idle.blinkActive && idle.blinkTimer >= idle.nextBlink) {
-      idle.blinkActive = true; idle.blinkT = 0;
-      idle.nextBlink = idle.blinkTimer + 2.5 + Math.random() * 4;
+      idle.blinkActive = true;
+      idle.blinkT      = 0;
+      idle.nextBlink   = idle.blinkTimer + 2.5 + Math.random() * 4;
     }
     if (idle.blinkActive) {
       idle.blinkT += delta;
       const D = 0.12;
-      let w = idle.blinkT < D*0.5 ? idle.blinkT/(D*0.5) : idle.blinkT < D ? 1-(idle.blinkT-D*0.5)/(D*0.5) : 0;
+      let w = idle.blinkT < D * 0.5
+        ? idle.blinkT / (D * 0.5)
+        : idle.blinkT < D
+          ? 1 - (idle.blinkT - D * 0.5) / (D * 0.5)
+          : 0;
       if (idle.blinkT >= D) { w = 0; idle.blinkActive = false; }
       ['blink','blinkLeft','blinkRight'].forEach(n => safeSet(em, n, w));
     } else {
@@ -339,10 +249,16 @@ function tickIdle(delta) {
 }
 
 function applyBone(hb, name, rx, ry, rz) {
-  try { const b = hb.getNormalizedBoneNode(name); if(b){b.rotation.x=rx;b.rotation.y=ry;b.rotation.z=rz;} } catch(_){}
+  try {
+    const b = hb.getNormalizedBoneNode(name);
+    if (b) { b.rotation.x = rx; b.rotation.y = ry; b.rotation.z = rz; }
+  } catch (_) {}
 }
-function safeSet(em, name, v) { try { em.setValue(name, v); } catch(_){} }
+function safeSet(em, name, v) {
+  try { em.setValue(name, v); } catch (_) {}
+}
 
+// ─── Render loop ──────────────────────────────────────────────────────────────
 function animate() {
   requestAnimationFrame(animate);
   const delta = Math.min(clock.getDelta(), 0.05);
@@ -350,16 +266,13 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-// ── Boot ──────────────────────────────────────────────────────────────────
-window.addEventListener('error',             e => dbg('❌ ' + e.message, 'error'));
-window.addEventListener('unhandledrejection',e => dbg('❌ Promise: ' + e.reason, 'error'));
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+window.addEventListener('error',              e => notifyKotlin('onModelError', e.message));
+window.addEventListener('unhandledrejection', e => notifyKotlin('onModelError', String(e.reason)));
 
-dbg('✓ Renderer READY', 'success');
 setStatus('');
 animate();
 notifyKotlin('onRendererReady', '');
-`;
-}
 </script>
 </body>
 </html>
