@@ -21,7 +21,7 @@ import com.android.exe.data.PetDatabase
 import com.android.exe.data.entities.PetProfile
 import com.android.exe.data.entities.PersonalityTraits
 import com.android.exe.overlay.PetOverlayManager
-import com.android.exe.ui.MainActivity
+import com.android.exe.MainActivity
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
