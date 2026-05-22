@@ -1,38 +1,52 @@
+// File: app/src/main/kotlin/com/android/exe/MainApplication.kt
 package com.android.exe
 
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build
 import android.util.Log
+import com.android.exe.ai.LlamaBridge
 
 class MainApplication : Application() {
 
     companion object {
         private const val TAG = "MainApplication"
-        private lateinit var instance: MainApplication
-
-        fun getInstance(): MainApplication = instance
+        lateinit var instance: MainApplication
+            private set
     }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        createNotificationChannels()
+        // Warm up the native library; LlamaBridge handles the actual loadLibrary call
+        LlamaBridge.ensureLibrary()
         Log.d(TAG, "MainApplication initialized")
-
-        // Try to load native library, but don't crash if it fails
-        try {
-            initializeLlamaRuntime()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error initializing llama runtime (continuing)", e)
-        }
     }
 
-    private fun initializeLlamaRuntime() {
-        try {
-            System.loadLibrary("llama")
-            Log.d(TAG, "Llama native library loaded successfully")
-        } catch (e: UnsatisfiedLinkError) {
-            Log.w(TAG, "Llama native library not available - app will continue")
-        } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error loading llama", e)
+    private fun createNotificationChannels() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(NotificationManager::class.java) ?: return
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    AndroidExeApp.CHANNEL_ID_PET,
+                    "Pet Companion",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Keeps your AI pet running"
+                    setShowBadge(false)
+                }
+            )
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    AndroidExeApp.CHANNEL_ID_ALERT,
+                    "Pet Reactions",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    description = "Pet speech bubbles and alerts"
+                }
+            )
         }
     }
 
