@@ -74,7 +74,7 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun setupPermissionLaunchers() {
-        overlaySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        overlaySettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
             Log.d(TAG, "Returned from overlay settings")
             Thread.sleep(500)
             showPermissionsScreen()
@@ -93,11 +93,11 @@ class SetupActivity : AppCompatActivity() {
         val layout = layoutInflater.inflate(R.layout.setup_screen_permissions, binding.screenContainer, false)
         binding.screenContainer.addView(layout)
         
-        val tvOverlayStatus = layout.findViewById<TextView>(R.id.tvOverlayStatus)
-        val tvNotificationStatus = layout.findViewById<TextView>(R.id.tvNotificationStatus)
-        val btnRequestOverlay = layout.findViewById<Button>(R.id.btnRequestOverlay)
+        val tvOverlayStatus       = layout.findViewById<TextView>(R.id.tvOverlayStatus)
+        val tvNotificationStatus  = layout.findViewById<TextView>(R.id.tvNotificationStatus)
+        val btnRequestOverlay     = layout.findViewById<Button>(R.id.btnRequestOverlay)
         val btnRequestNotification = layout.findViewById<Button>(R.id.btnRequestNotification)
-        val btnNext = layout.findViewById<Button>(R.id.btnNext)
+        val btnNext               = layout.findViewById<Button>(R.id.btnNext)
         
         updatePermissionStatus(tvOverlayStatus, tvNotificationStatus)
         
@@ -135,8 +135,6 @@ class SetupActivity : AppCompatActivity() {
             true
         }
         
-        Log.d(TAG, "Overlay: $overlayPermissionGranted, Notification: $notificationPermissionGranted")
-        
         tvOverlay.text = if (overlayPermissionGranted) "✓ Display over other apps: ENABLED" else "✗ Display over other apps: DISABLED"
         tvOverlay.setTextColor(if (overlayPermissionGranted) android.graphics.Color.GREEN else android.graphics.Color.RED)
         
@@ -168,10 +166,10 @@ class SetupActivity : AppCompatActivity() {
         binding.screenContainer.addView(layout)
         
         tvSelectedAvatar = layout.findViewById(R.id.tvSelectedAvatar)
-        tvSelectedModel = layout.findViewById(R.id.tvSelectedModel)
+        tvSelectedModel  = layout.findViewById(R.id.tvSelectedModel)
         val btnPickAvatar = layout.findViewById<Button>(R.id.btnPickAvatar)
-        val btnPickModel = layout.findViewById<Button>(R.id.btnPickModel)
-        val btnStart = layout.findViewById<Button>(R.id.btnStart)
+        val btnPickModel  = layout.findViewById<Button>(R.id.btnPickModel)
+        val btnStart      = layout.findViewById<Button>(R.id.btnStart)
         
         btnPickAvatar.setOnClickListener {
             avatarFilePicker.launch(FilePickerUtils.getAvatarPickerIntent())
@@ -191,7 +189,23 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun completeSetup() {
-        Log.d(TAG, "Setup complete, starting MainActivity")
+        Log.d(TAG, "Setup complete — starting service then MainActivity")
+
+        // Start the pet service immediately with the selected files so the
+        // avatar appears right away, without needing a second "Start Pet" tap.
+        if (selectedAvatarUri.isNotEmpty()) {
+            val serviceIntent = Intent(this, com.android.exe.service.PetForegroundService::class.java).apply {
+                action = com.android.exe.service.PetForegroundService.ACTION_START
+                putExtra(com.android.exe.service.PetForegroundService.EXTRA_AVATAR_URI, selectedAvatarUri)
+                putExtra(com.android.exe.service.PetForegroundService.EXTRA_MODEL_URI, selectedModelUri)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+        }
+
         startActivity(Intent(this, MainActivity::class.java))
         finish()
     }
