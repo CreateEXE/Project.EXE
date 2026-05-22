@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- File: app/src/main/AndroidManifest.xml -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -41,8 +42,9 @@
             android:exported="false"
             android:screenOrientation="portrait" />
 
+        <!-- Full class path needed: PetForegroundService is in the .service subpackage -->
         <service
-            android:name=".PetForegroundService"
+            android:name=".service.PetForegroundService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
