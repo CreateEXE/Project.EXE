@@ -16,336 +16,205 @@ import kotlinx.coroutines.*
 class PetOverlayManager(private val context: Context) {
 
     companion object {
-        private const val TAG = "PetOverlay"
-        private const val OVERLAY_WIDTH_DP   = 160
-        private const val OVERLAY_HEIGHT_DP  = 240
-        private const val BUBBLE_MAX_WIDTH_DP = 220
+        private const val TAG               = "PetOverlay"
+        private const val OVERLAY_WIDTH_DP  = 160
+        private const val OVERLAY_HEIGHT_DP = 240
+        private const val BUBBLE_MAX_DP     = 220
     }
 
     private val wm: WindowManager =
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-    private val density = context.resources.displayMetrics.density
+    private val density    = context.resources.displayMetrics.density
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // ── Views ──────────────────────────────────────────────────────────────────
-    private var overlayRoot: FrameLayout? = null
-    var avatarView: AvatarWebView? = null
-        private set
-    private var speechBubble: TextView? = null
-    private var debugPanel: DebugPanelView? = null      // NEW: debug display
+    private var overlayRoot:  FrameLayout?  = null
+    var avatarView: AvatarWebView? = null; private set
+    private var speechBubble: TextView?     = null
+    private var debugPanel:   DebugPanelView? = null
 
-    // ── Async jobs ─────────────────────────────────────────────────────────────
+    private var params: WindowManager.LayoutParams? = null
+    private var motionController: PetMotionController? = null
+
     private var bubbleJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     // ── Drag state ─────────────────────────────────────────────────────────────
-    private var params: WindowManager.LayoutParams? = null
-    private var dragging = false
-    private var initialTouchX = 0f
-    private var initialTouchY = 0f
-    private var initialX = 0
-    private var initialY = 0
+    private var dragging     = false
+    private var touchX0      = 0f;  private var touchY0 = 0f
+    private var paramX0      = 0;   private var paramY0 = 0
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Custom debug panel view
-    // ─────────────────────────────────────────────────────────────────────────
-    private inner class DebugPanelView(context: Context) : View(context) {
-        private val debugLines = mutableListOf<String>()
-        private val maxLines = 8
+    // ── Debug panel ────────────────────────────────────────────────────────────
+    private inner class DebugPanelView(ctx: Context) : android.view.View(ctx) {
+        private val lines = mutableListOf<String>()
         private val paint = android.graphics.Paint().apply {
-            color = Color.GREEN
-            textSize = 28f  // 10sp in pixels
+            color = Color.GREEN; textSize = 28f
             typeface = android.graphics.Typeface.MONOSPACE
         }
-        private val bgPaint = android.graphics.Paint().apply {
-            color = Color.argb(200, 0, 0, 0)  // semi-transparent black
-        }
-        private val borderPaint = android.graphics.Paint().apply {
-            color = Color.GREEN
-            strokeWidth = 2f
+        private val bg = android.graphics.Paint().apply { color = Color.argb(200, 0, 0, 0) }
+        private val border = android.graphics.Paint().apply {
+            color = Color.GREEN; strokeWidth = 2f
             style = android.graphics.Paint.Style.STROKE
         }
-
-        fun addLine(msg: String) {
-            debugLines.add(msg)
-            if (debugLines.size > maxLines) debugLines.removeAt(0)
-            invalidate()
-        }
-
-        fun clear() {
-            debugLines.clear()
-            invalidate()
-        }
-
-        override fun onDraw(canvas: android.graphics.Canvas) {
-            super.onDraw(canvas)
-            
-            val w = width.toFloat()
-            val h = height.toFloat()
-            
-            // Background
-            canvas.drawRect(0f, 0f, w, h, bgPaint)
-            // Border
-            canvas.drawRect(0f, 0f, w, h, borderPaint)
-            
-            // Text
-            var y = 20f
-            for (line in debugLines) {
-                canvas.drawText(line, 8f, y, paint)
-                y += 20f
-            }
+        fun add(msg: String) { lines.add(msg); if (lines.size > 8) lines.removeAt(0); invalidate() }
+        fun clear() { lines.clear(); invalidate() }
+        override fun onDraw(c: android.graphics.Canvas) {
+            c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bg)
+            c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), border)
+            lines.forEachIndexed { i, s -> c.drawText(s, 8f, 20f + i * 20f, paint) }
         }
     }
 
-    fun addDebugLine(msg: String) {
-        debugPanel?.addLine(msg)
-    }
+    fun addDebugLine(msg: String) { debugPanel?.add(msg) }
+    fun clearDebugPanel()         { debugPanel?.clear() }
 
-    fun clearDebugPanel() {
-        debugPanel?.clear()
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // attach() - Creates overlay with avatar view and debug panel
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── attach ─────────────────────────────────────────────────────────────────
     fun attach(avatarPath: String?) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { attach(avatarPath) }
-            return
-        }
+        if (Looper.myLooper() != Looper.getMainLooper()) { mainHandler.post { attach(avatarPath) }; return }
         if (overlayRoot != null) return
 
         val w = (OVERLAY_WIDTH_DP  * density).toInt()
         val h = (OVERLAY_HEIGHT_DP * density).toInt()
 
-        params = WindowManager.LayoutParams(
+        val lp = WindowManager.LayoutParams(
             w, h,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE,
+            else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.BOTTOM or Gravity.END
-            x = 16
-            y = 120
-        }
+        ).apply { gravity = Gravity.BOTTOM or Gravity.END; x = 16; y = 120 }
+        params = lp
 
-        // ── Root container ──
         val root = object : FrameLayout(context) {
-            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true
+            override fun onInterceptTouchEvent(ev: MotionEvent) = true
         }.also { overlayRoot = it }
         root.setBackgroundColor(Color.TRANSPARENT)
 
-        // ── Avatar WebView ──
+        // Avatar WebView
         val avw = AvatarWebView(context).also { avatarView = it }
         avw.setBackgroundColor(Color.TRANSPARENT)
-        avw.background?.alpha = 0
-        
-        // Listen for debug messages
         avw.listener = object : AvatarWebView.Listener {
-            override fun onRendererReady() {
-                addDebugLine("✅ READY")
-            }
-            override fun onModelLoaded(name: String) {
-                addDebugLine("✅ Model OK")
-            }
-            override fun onModelError(error: String) {
-                addDebugLine("❌ ${error.take(15)}")
-            }
-            override fun onDebugMessage(msg: String) {
-                // Truncate long messages
-                val short = msg.take(20)
-                addDebugLine(short)
-            }
+            override fun onRendererReady()        { addDebugLine("✅ READY") }
+            override fun onModelLoaded(name: String) { addDebugLine("✅ Model OK") }
+            override fun onModelError(error: String) { addDebugLine("❌ ${error.take(15)}") }
+            override fun onDebugMessage(msg: String) { addDebugLine(msg.take(20)) }
         }
-        
         root.addView(avw, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-        ))
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
 
-        // ── Debug Panel (top-left corner, semi-transparent) ──
-        val debugView = DebugPanelView(context).also { debugPanel = it }
-        root.addView(debugView, FrameLayout.LayoutParams(
-            250,  // width
-            180,  // height
-            Gravity.TOP or Gravity.START
-        ).also { 
-            it.leftMargin = 4
-            it.topMargin = 4
-        })
-        
-        addDebugLine("🎬 INIT")
+        // Debug panel
+        val dbg = DebugPanelView(context).also { debugPanel = it }
+        root.addView(dbg, FrameLayout.LayoutParams(250, 180,
+            Gravity.TOP or Gravity.START).also { it.leftMargin = 4; it.topMargin = 4 })
 
-        // ── Speech bubble ────
+        // Speech bubble
         val bubble = TextView(context).apply {
             visibility = View.GONE
             setTextColor(Color.WHITE)
             setBackgroundResource(android.R.drawable.toast_frame)
-            textSize = 12f
-            setPadding(16, 8, 16, 8)
-            maxWidth = (BUBBLE_MAX_WIDTH_DP * density).toInt()
+            textSize = 12f; setPadding(16, 8, 16, 8)
+            maxWidth = (BUBBLE_MAX_DP * density).toInt()
         }
         speechBubble = bubble
         root.addView(bubble, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT
         ).also { it.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL })
 
-        // ── Gestures ─────────
-        val gestureDetector = GestureDetector(context,
-            object : GestureDetector.SimpleOnGestureListener() {
-                override fun onDoubleTap(e: MotionEvent): Boolean {
-                    cycleSizeMode(); return true
-                }
-            })
-
-        // ── Touch listener ────
-        root.setOnTouchListener { v, event ->
-            gestureDetector.onTouchEvent(event)
-            when (event.action) {
+        // Touch / drag
+        val gd = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean { cycleSizeMode(); return true }
+        })
+        root.setOnTouchListener { v, ev ->
+            gd.onTouchEvent(ev)
+            when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
                     dragging = false
-                    initialTouchX = event.rawX; initialTouchY = event.rawY
-                    initialX = params!!.x;      initialY = params!!.y
+                    touchX0 = ev.rawX; touchY0 = ev.rawY
+                    paramX0 = lp.x;    paramY0 = lp.y
+                    motionController?.onDragStart()
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - initialTouchX).toInt()
-                    val dy = (event.rawY - initialTouchY).toInt()
-                    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) dragging = true
+                    val dx = (ev.rawX - touchX0).toInt()
+                    val dy = (ev.rawY - touchY0).toInt()
+                    if (!dragging && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) dragging = true
                     if (dragging) {
-                        params!!.x = initialX - dx
-                        params!!.y = initialY - dy
-                        try { wm.updateViewLayout(root, params) } catch (_: Exception) {}
+                        lp.x = paramX0 - dx; lp.y = paramY0 - dy
+                        try { wm.updateViewLayout(root, lp) } catch (_: Exception) {}
                     }
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragging) v.performClick()
+                    if (dragging) motionController?.onDragEnd()
+                    else v.performClick()
+                    dragging = false
                 }
             }
             true
         }
 
-        wm.addView(root, params)
-        Log.i(TAG, "✅ Overlay attached (${w}×${h}px) with debug panel")
+        wm.addView(root, lp)
         addDebugLine("✅ OVERLAY UP")
 
-        if (!avatarPath.isNullOrBlank()) {
-            Log.d(TAG, "Loading avatar: $avatarPath")
-            addDebugLine("→ LOAD")
-            avw.loadModelFromPath(avatarPath)
-        } else {
-            Log.w(TAG, "No avatar path provided")
-            addDebugLine("⚠️  No path")
-        }
+        // Start motion after view is added
+        motionController = PetMotionController(wm, lp, root, w, h).also { it.start() }
+        addDebugLine("🚶 MOTION ON")
+
+        if (!avatarPath.isNullOrBlank()) avw.loadModelFromPath(avatarPath)
+        else addDebugLine("⚠️  No path")
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // detach
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── detach ─────────────────────────────────────────────────────────────────
     fun detach() {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { detach() }
-            return
-        }
+        if (Looper.myLooper() != Looper.getMainLooper()) { mainHandler.post { detach() }; return }
+        motionController?.stop(); motionController = null
         overlayRoot?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         avatarView?.destroy()
-        avatarView   = null
-        overlayRoot  = null
-        speechBubble = null
-        debugPanel   = null
+        avatarView = null; overlayRoot = null; speechBubble = null; debugPanel = null
         scope.cancel()
-        Log.i(TAG, "Overlay detached")
     }
 
     fun isAttached() = overlayRoot != null
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Speech bubble
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Motion forwarding ──────────────────────────────────────────────────────
+    fun onMoodChanged(valence: Float, arousal: Float) = motionController?.onMoodChanged(valence, arousal)
+    fun onAppChanged(pkg: String)                     = motionController?.onAppChanged(pkg)
+    fun onKeyboardVisible(keyboardH: Int)             = motionController?.onKeyboardVisible(keyboardH)
+    fun onKeyboardHidden()                            = motionController?.onKeyboardHidden()
+    fun triggerPeek()                                 = motionController?.peek()
+
+    // ── Speech bubble ──────────────────────────────────────────────────────────
     fun showSpeechBubble(text: String, durationMs: Long = 5000L) {
         bubbleJob?.cancel()
         speechBubble?.let { b ->
-            b.text = text
-            b.visibility = View.VISIBLE
-            bubbleJob = scope.launch {
-                delay(durationMs)
-                b.visibility = View.GONE
-            }
+            b.text = text; b.visibility = View.VISIBLE
+            bubbleJob = scope.launch { delay(durationMs); b.visibility = View.GONE }
         }
     }
+    fun hideSpeechBubble() { bubbleJob?.cancel(); speechBubble?.visibility = View.GONE }
 
-    fun hideSpeechBubble() {
-        bubbleJob?.cancel()
-        speechBubble?.visibility = View.GONE
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Size cycling (double-tap)
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Size cycling ───────────────────────────────────────────────────────────
     private var sizeMode = 0
-
     private fun cycleSizeMode() {
         sizeMode = (sizeMode + 1) % 3
-        val (w, h) = when (sizeMode) {
-            1    -> Pair(240, 360)
-            2    -> Pair(100, 150)
-            else -> Pair(OVERLAY_WIDTH_DP, OVERLAY_HEIGHT_DP)
+        val (w, h, framing) = when (sizeMode) {
+            1    -> Triple(240, 360, "full")
+            2    -> Triple(100, 150, "face")
+            else -> Triple(OVERLAY_WIDTH_DP, OVERLAY_HEIGHT_DP, "bust")
         }
         params?.let { p ->
             p.width  = (w * density).toInt()
             p.height = (h * density).toInt()
-            overlayRoot?.let { root ->
-                try { wm.updateViewLayout(root, p) } catch (_: Exception) {}
-            }
+            overlayRoot?.let { try { wm.updateViewLayout(it, p) } catch (_: Exception) {} }
         }
-        when (sizeMode) {
-            1    -> {
-                avatarView?.setFraming("full")
-                addDebugLine("FULL")
-            }
-            2    -> {
-                avatarView?.setFraming("face")
-                addDebugLine("FACE")
-            }
-            else -> {
-                avatarView?.setFraming("bust")
-                addDebugLine("BUST")
-            }
-        }
+        avatarView?.setFraming(framing)
+        addDebugLine(framing.uppercase())
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Delegated avatar controls
-    // ─────────────────────────────────────────────────────────────────────────
-    fun playExpression(emotion: PetEmotion) {
-        addDebugLine("EXPR: ${emotion.vrmExpression}")
-        avatarView?.playExpression(emotion)
-    }
-    
-    fun resetExpression() {
-        addDebugLine("RESET")
-        avatarView?.resetExpression()
-    }
-    
-    fun loadAvatar(path: String) {
-        addDebugLine("LOAD: ${path.substringAfterLast("/").take(12)}")
-        avatarView?.loadModelFromPath(path)
-    }
-
-    fun sayLlmThinking() {
-        addDebugLine("🤔 LLM...")
-    }
-
-    fun sayLlmDone() {
-        addDebugLine("✅ LLM OK")
-    }
-
-    fun sayLlmError(error: String) {
-        addDebugLine("❌ LLM ERR")
-    }
+    // ── Avatar controls ────────────────────────────────────────────────────────
+    fun playExpression(emotion: PetEmotion) { addDebugLine("EXPR: ${emotion.vrmExpression}"); avatarView?.playExpression(emotion) }
+    fun resetExpression()                   { avatarView?.resetExpression() }
+    fun loadAvatar(path: String)            { avatarView?.loadModelFromPath(path) }
+    fun sayLlmThinking()                    { addDebugLine("🤔 LLM...") }
+    fun sayLlmDone()                        { addDebugLine("✅ LLM OK") }
+    fun sayLlmError(error: String)          { addDebugLine("❌ LLM ERR") }
 }
