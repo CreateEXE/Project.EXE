@@ -93,7 +93,6 @@ class PetReactionEngine(
         mood: MoodVector
     ): String = buildString {
 
-        // System block — use soul manager if available, otherwise generic fallback
         val systemBlock = soulManager?.compileSystemPrompt(profile, traits, mood)
             ?: buildFallbackSystemPrompt(profile, traits, mood)
 
@@ -134,4 +133,32 @@ class PetReactionEngine(
         appendLine()
         appendLine("Current mood: ${mood.toPetEmotion().name.lowercase()} " +
                    "(valence=${mood.valence.fmt()} arousal=${mood.arousal.fmt()})")
-        if (t
+        if (traits != null) {
+            appendLine()
+            appendLine("Personality (Big Five 0–1):")
+            appendLine("  O:${traits.openness.fmt()} E:${traits.extraversion.fmt()} " +
+                       "A:${traits.agreeableness.fmt()} N:${traits.neuroticism.fmt()}")
+            if (traits.coreQuirk.isNotBlank())  appendLine("  Quirk: ${traits.coreQuirk}")
+            if (traits.speechStyle.isNotBlank()) appendLine("  Style: ${traits.speechStyle}")
+        }
+        appendLine()
+        appendLine("Rules:")
+        appendLine("  - Reply in 1–3 short sentences. Be spontaneous.")
+        appendLine("  - Reflect your current mood in your reply.")
+        appendLine("  - End with exactly one tag: [EMOTION:happy] [EMOTION:sad] [EMOTION:angry]")
+        appendLine("    [EMOTION:surprised] [EMOTION:relaxed] [EMOTION:neutral]")
+        appendLine("  - No markdown.")
+    }
+
+    private fun Float.fmt() = String.format("%.2f", this)
+
+    // ─── Parse response ───────────────────────────────────────────────────────
+
+    private fun parseResponse(raw: String): Pair<String, PetEmotion> {
+        val tagRegex = Regex("""\[EMOTION:(\w+)]""", RegexOption.IGNORE_CASE)
+        val match    = tagRegex.find(raw)
+        val emotion  = if (match != null) PetEmotion.fromTag(match.groupValues[1]) else PetEmotion.HAPPY
+        val text     = raw.replace(tagRegex, "").trim()
+        return text to emotion
+    }
+}
