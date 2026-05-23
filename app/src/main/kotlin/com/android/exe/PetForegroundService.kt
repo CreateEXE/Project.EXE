@@ -14,9 +14,7 @@ import com.android.exe.AndroidExeApp
 import com.android.exe.R
 import com.android.exe.accessibility.PetAccessibilityService
 import com.android.exe.accessibility.ScreenContext
-import com.android.exe.ai.LlamaBridge
-import com.android.exe.ai.PetEmotion
-import com.android.exe.ai.PetReactionEngine
+import com.android.exe.ai.*
 import com.android.exe.data.PetDatabase
 import com.android.exe.data.entities.PetProfile
 import com.android.exe.data.entities.PersonalityTraits
@@ -29,28 +27,49 @@ import java.io.File
 class PetForegroundService : LifecycleService() {
 
     companion object {
-        private const val TAG = "PetService"
-        const val ACTION_START          = "com.android.exe.action.START"
-        const val ACTION_STOP           = "com.android.exe.action.STOP"
-        const val ACTION_RELOAD_AVATAR  = "com.android.exe.RELOAD_AVATAR"
-        const val ACTION_RELOAD_MODEL   = "com.android.exe.RELOAD_MODEL"
-        const val EXTRA_AVATAR_URI      = "avatar_uri"
-        const val EXTRA_MODEL_URI       = "model_uri"
-        const val NOTIFICATION_ID       = 1001
+        private const val TAG                  = "PetService"
+        const val ACTION_START                 = "com.android.exe.action.START"
+        const val ACTION_STOP                  = "com.android.exe.action.STOP"
+        const val ACTION_RELOAD_AVATAR         = "com.android.exe.RELOAD_AVATAR"
+        const val ACTION_RELOAD_MODEL          = "com.android.exe.RELOAD_MODEL"
+        const val EXTRA_AVATAR_URI             = "avatar_uri"
+        const val EXTRA_MODEL_URI              = "model_uri"
+        const val NOTIFICATION_ID              = 1001
         private const val REACTION_COOLDOWN_MS = 15_000L
     }
 
-    private val db by lazy { PetDatabase.getInstance(this) }
-    private val llama by lazy { LlamaBridge() }
-    private val reactionEngine by lazy { PetReactionEngine(llama) }
+    // ── Core dependencies ──────────────────────────────────────────────────────
+    private val db             by lazy { PetDatabase.getInstance(this) }
+    private val llama          by lazy { LlamaBridge() }
+    private val soulManager    by lazy { FaitSoulManager(this) }
+    private val reactionEngine by lazy { PetReactionEngine(llama, soulManager) }
+
+    // ── Mood system (DroneSwarm handles expression callbacks into the overlay) ──
+    private val droneSwarm by lazy {
+        DroneSwarm(
+            llama      = llama,
+            memoryDao  = db.petMemoryDao(),
+            onExpressionUpdate = { name, weight, durationSec ->
+                mainHandler.post {
+                    overlayManager?.avatarView?.evaluateJavascript(
+                        "AvatarAPI.playExpression('$name',$weight,$durationSec);", null
+                    )
+                }
+            }
+        )
+    }
+    private val emotionDaemon by lazy { EmotionDaemon(db.petProfileDao(), droneSwarm) }
+
+    // ── UI ─────────────────────────────────────────────────────────────────────
     private var overlayManager: PetOverlayManager? = null
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // ── State ──────────────────────────────────────────────────────────────────
     private var profile: PetProfile? = null
     private var traits: PersonalityTraits? = null
     private var lastReactionMs = 0L
 
+    // ─────────────────────────────────────────────────────────────────────────
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "onCreate")
@@ -66,69 +85,58 @@ class PetForegroundService : LifecycleService() {
                 val avatarUriStr = intent.getStringExtra(EXTRA_AVATAR_URI)
                 val modelUriStr  = intent.getStringExtra(EXTRA_MODEL_URI)
 
-                scope.launch {
+                lifecycleScope.launch {
                     val avatarPath = resolveAvatarPath(avatarUriStr)
                     Log.d(TAG, "Resolved avatarPath=$avatarPath")
 
                     if (avatarPath != null) {
                         try {
-                            val profile = db.petProfileDao().getActive()
-                            if (profile != null) db.petProfileDao().setAvatarPath(profile.id, avatarPath)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Could not persist avatar path to DB", e)
-                        }
+                            val p = db.petProfileDao().getActive()
+                            if (p != null) db.petProfileDao().setAvatarPath(p.id, avatarPath)
+                        } catch (e: Exception) { Log.w(TAG, "Could not persist avatar path", e) }
                     }
                     if (!modelUriStr.isNullOrBlank()) {
                         try {
-                            val profile = db.petProfileDao().getActive()
-                            if (profile != null) {
+                            val p = db.petProfileDao().getActive()
+                            if (p != null) {
                                 val mPath = copyUriToCache(android.net.Uri.parse(modelUriStr), "model.gguf")
-                                if (mPath != null) db.petProfileDao().setModelPath(profile.id, mPath)
+                                if (mPath != null) db.petProfileDao().setModelPath(p.id, mPath)
                             }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Could not persist model path to DB", e)
-                        }
+                        } catch (e: Exception) { Log.w(TAG, "Could not persist model path", e) }
                     }
 
-                    startOverlay(avatarPath)
+                    initialize(avatarPath)
                 }
             }
 
             ACTION_RELOAD_AVATAR -> {
-                scope.launch {
+                lifecycleScope.launch {
                     val path = db.petProfileDao().getActive()?.avatarPath
-                    if (!path.isNullOrBlank()) {
-                        overlayManager?.loadAvatar(path)
-                    } else {
-                        Log.w(TAG, "RELOAD_AVATAR: no path in DB")
-                    }
+                    if (!path.isNullOrBlank()) overlayManager?.loadAvatar(path)
+                    else Log.w(TAG, "RELOAD_AVATAR: no path in DB")
                 }
             }
 
             ACTION_RELOAD_MODEL -> {
-                scope.launch {
+                lifecycleScope.launch {
                     val path = db.petProfileDao().getActive()?.llmModelPath
                     if (!path.isNullOrBlank()) {
                         llama.load(path)
-                        Log.i(TAG, "Model reloaded from DB: $path")
-                    } else {
-                        Log.w(TAG, "RELOAD_MODEL: no path in DB")
-                    }
+                        Log.i(TAG, "Model reloaded: $path")
+                    } else Log.w(TAG, "RELOAD_MODEL: no path in DB")
                 }
             }
 
-            ACTION_STOP, null -> {
-                if (intent?.action == null) {
-                    Log.d(TAG, "Normal startup - loading from database")
-                    scope.launch {
-                        initialize()
-                    }
-                    return START_STICKY
-                }
-                
-                Log.i(TAG, "Received STOP action")
-                stopOverlay()
+            ACTION_STOP -> {
+                Log.i(TAG, "Received STOP")
+                teardown()
                 stopSelf()
+            }
+
+            null -> {
+                // Restarted by OS — reload from database
+                Log.d(TAG, "Restarted by OS — loading from DB")
+                lifecycleScope.launch { initialize(null) }
             }
         }
 
@@ -139,18 +147,21 @@ class PetForegroundService : LifecycleService() {
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
-        stopOverlay()
+        teardown()
         lifecycleScope.launch(NonCancellable) { llama.free() }
         super.onDestroy()
     }
 
-    private suspend fun initialize() {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Initialise everything from the DB
+    // ─────────────────────────────────────────────────────────────────────────
+    private suspend fun initialize(passedAvatarPath: String?) {
         if (!Settings.canDrawOverlays(this)) {
             Log.e(TAG, "SYSTEM_ALERT_WINDOW not granted — stopping")
-            stopSelf()
-            return
+            stopSelf(); return
         }
 
+        // 1. Ensure a profile exists
         var p = db.petProfileDao().getActive()
         if (p == null) {
             val id = db.petProfileDao().insert(PetProfile(petName = "Exe"))
@@ -159,70 +170,42 @@ class PetForegroundService : LifecycleService() {
         }
         profile = p
         traits  = db.personalityTraitsDao().getForPet(p.id)
-
         Log.d(TAG, "Profile: ${p.petName}, avatar=${p.avatarPath}, model=${p.llmModelPath}")
 
-        val avatarPath = p.avatarPath
-        if (!avatarPath.isNullOrBlank()) {
-            Log.i(TAG, "Loading persisted avatar: $avatarPath")
-            withContext(Dispatchers.Main) { startOverlay(avatarPath) }
-        } else {
-            Log.w(TAG, "No persisted avatar path - overlay will show 'no path'")
-            withContext(Dispatchers.Main) { startOverlay(null) }
-        }
+        // 2. Initialise soul (copies fait_soul.json from assets on first run)
+        soulManager.initialize()
 
+        // 3. Start the mood daemon with the last known mood from DB
+        val initialMood = MoodVector(
+            valence   = p.currentMood,
+            arousal   = p.energyLevel,
+            dominance = 0.55f
+        )
+        emotionDaemon.start(p.id, initialMood)
+
+        // 4. Start overlay
+        val avatarPath = passedAvatarPath ?: p.avatarPath
+        withContext(Dispatchers.Main) { startOverlay(avatarPath) }
+
+        // 5. Load LLM
         p.llmModelPath?.let { path ->
             if (File(path).exists()) {
                 Log.i(TAG, "Loading persisted model: $path")
                 val ok = llama.load(path)
-                Log.i(TAG, "LLM load=$ok  path=$path")
+                Log.i(TAG, "LLM load=$ok")
             } else {
-                Log.w(TAG, "Model path in DB but file doesn't exist: $path")
+                Log.w(TAG, "Model path in DB but file missing: $path")
             }
         }
 
+        // 6. Subscribe to screen events
         subscribeToScreenEvents()
         Log.i(TAG, "Ready — pet=${p.petName}")
     }
 
-    private suspend fun resolveAvatarPath(uriStr: String?): String? {
-        if (!uriStr.isNullOrBlank()) {
-            val path = copyUriToCache(android.net.Uri.parse(uriStr), "avatar.vrm")
-            if (path != null) return path
-            Log.w(TAG, "URI copy failed for: $uriStr")
-        }
-
-        val dbPath = db.petProfileDao().getActive()?.avatarPath
-        if (!dbPath.isNullOrBlank() && File(dbPath).exists()) {
-            Log.d(TAG, "Using DB avatar path: $dbPath")
-            return dbPath
-        }
-
-        val stdFile = File(filesDir, "avatar.vrm")
-        if (stdFile.exists()) {
-            Log.d(TAG, "Using standard avatar.vrm from filesDir")
-            return stdFile.absolutePath
-        }
-
-        Log.w(TAG, "No avatar path could be resolved")
-        return null
-    }
-
-    private suspend fun copyUriToCache(uri: android.net.Uri, fileName: String): String? =
-        withContext(Dispatchers.IO) {
-            try {
-                val dest = File(cacheDir, fileName)
-                val input = contentResolver.openInputStream(uri)
-                    ?: return@withContext null
-                java.io.FileOutputStream(dest).use { out -> input.use { it.copyTo(out) } }
-                Log.d(TAG, "Copied $uri → ${dest.absolutePath} (${dest.length()} bytes)")
-                dest.absolutePath
-            } catch (e: Exception) {
-                Log.e(TAG, "copyUriToCache failed for $uri", e)
-                null
-            }
-        }
-
+    // ─────────────────────────────────────────────────────────────────────────
+    // Screen event → reaction
+    // ─────────────────────────────────────────────────────────────────────────
     private fun subscribeToScreenEvents() {
         PetAccessibilityService.screenFlow
             .onEach { ctx -> handleScreenContext(ctx) }
@@ -237,14 +220,23 @@ class PetForegroundService : LifecycleService() {
 
         val p = profile ?: return
 
+        // Fire new-app mood event when the package changes
+        emotionDaemon.onEvent(MoodEvent.NewApp)
+
         if (!llama.isLoaded()) {
-            val idle = listOf(PetEmotion.HAPPY, PetEmotion.RELAXED, PetEmotion.SURPRISED)
-            withContext(Dispatchers.Main) { overlayManager?.playExpression(idle.random()) }
+            // No model yet — play an idle expression via EmotionDaemon baseline
+            droneSwarm.fireAnimationDrone(emotionDaemon.currentMood)
             return
         }
 
+        // Run sentiment on the screen context
+        val sentimentScore = droneSwarm.fireSentimentDrone(ctx.summary)
+        emotionDaemon.onEvent(MoodEvent.UserSentiment(sentimentScore))
+
         val memories = db.petMemoryDao().getRecent(p.id)
         val history  = db.interactionHistoryDao().getRecent(p.id)
+
+        overlayManager?.sayLlmThinking()
 
         try {
             var accumulated = ""
@@ -254,6 +246,7 @@ class PetForegroundService : LifecycleService() {
                 memories      = memories,
                 recentHistory = history,
                 screenCtx     = ctx,
+                currentMood   = emotionDaemon.currentMood,
                 onToken = { token ->
                     accumulated += token
                     val snap = accumulated
@@ -263,30 +256,39 @@ class PetForegroundService : LifecycleService() {
             withContext(Dispatchers.Main) {
                 overlayManager?.playExpression(reaction.emotion)
                 overlayManager?.showSpeechBubble(reaction.text, 6000L)
+                overlayManager?.sayLlmDone()
             }
+            emotionDaemon.onEvent(MoodEvent.ReactionComplete)
             db.interactionHistoryDao().insert(reaction.record)
             db.petProfileDao().bumpInteractionCount(p.id)
             db.interactionHistoryDao().pruneOld(p.id)
         } catch (e: Exception) {
             Log.e(TAG, "Reaction failed", e)
+            overlayManager?.sayLlmError(e.message ?: "error")
+            emotionDaemon.onEvent(MoodEvent.InferenceError)
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Overlay helpers
+    // ─────────────────────────────────────────────────────────────────────────
     private fun startOverlay(avatarPath: String?) {
-        if (overlayManager != null) {
-            Log.w(TAG, "Overlay already running")
-            return
-        }
+        if (overlayManager != null) { Log.w(TAG, "Overlay already running"); return }
         Log.d(TAG, "startOverlay avatarPath=$avatarPath")
         overlayManager = PetOverlayManager(this)
         overlayManager!!.attach(avatarPath)
     }
 
-    private fun stopOverlay() {
+    private fun teardown() {
+        emotionDaemon.stop()
+        droneSwarm.cancel()
         try { overlayManager?.detach() } catch (e: Exception) { Log.e(TAG, "detach error", e) }
         overlayManager = null
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Notification
+    // ─────────────────────────────────────────────────────────────────────────
     private fun createNotificationChannel() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -311,12 +313,5 @@ class PetForegroundService : LifecycleService() {
         )
         return NotificationCompat.Builder(this, AndroidExeApp.CHANNEL_ID_PET)
             .setContentTitle("Exe is active")
-            .setContentText("Tap to open settings • Swipe to stop")
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setContentIntent(openIntent)
-            .addAction(android.R.drawable.ic_delete, "Stop", stopIntent)
-            .build()
-    }
-}
+            .setContentText("Tap to open • Swipe to stop")
+            .setSmallIcon(R.mipmap.ic_launch
