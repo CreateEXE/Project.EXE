@@ -43,12 +43,10 @@
 <div id="status">Loading…</div>
 
 <script type="module">
-// ─── Imports resolved by the static importmap above ───────────────────────────
 import * as THREE                        from 'three';
 import { GLTFLoader }                    from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils }     from '@pixiv/three-vrm';
 
-// ─── Kotlin bridge helpers ────────────────────────────────────────────────────
 const statusEl = document.getElementById('status');
 function setStatus(msg) { statusEl.textContent = msg; }
 
@@ -56,7 +54,6 @@ function notifyKotlin(method, arg) {
   try { window.AndroidBridge[method](arg); } catch (_) {}
 }
 
-// ─── Renderer ─────────────────────────────────────────────────────────────────
 const canvas   = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -77,11 +74,9 @@ const fillLight = new THREE.DirectionalLight(0xc0d8ff, 0.4);
 fillLight.position.set(-1.5, 1, -1);
 scene.add(fillLight);
 
-// ─── Loader ───────────────────────────────────────────────────────────────────
 const loader = new GLTFLoader();
 loader.register(parser => new VRMLoaderPlugin(parser, { autoUpdateHumanBones: true }));
 
-// ─── State ────────────────────────────────────────────────────────────────────
 let currentVRM   = null;
 let currentModel = null;
 const clock = new THREE.Clock();
@@ -92,7 +87,6 @@ const idle  = {
 let activeExpressionName   = null;
 let activeExpressionWeight = 0;
 
-// ─── Public API (called by Kotlin via evaluateJavascript) ─────────────────────
 window.AvatarAPI = {
 
   loadModel(url) {
@@ -111,7 +105,6 @@ window.AvatarAPI = {
         try {
           const vrm = gltf.userData.vrm;
           if (!vrm) {
-            // Plain GLB without VRM metadata
             currentModel = gltf.scene;
             scene.add(currentModel);
             fitModel(currentModel);
@@ -127,6 +120,10 @@ window.AvatarAPI = {
             breathPhase: 0, blinkTimer: 0, nextBlink: 3,
             blinkActive: false, blinkT: 0
           });
+          // ── T-pose fix: arms start at bind pose (hands straight out).
+          // applyRelaxedPose() sets the initial rest position.
+          // tickIdle() re-applies it every frame so vrm.update() can't reset it.
+          applyRelaxedPose(vrm);
           activeExpressionName = null;
           activeExpressionWeight = 0;
           setCameraFraming(currentFraming);
@@ -182,7 +179,6 @@ window.AvatarAPI = {
   setFraming(mode) { setCameraFraming(mode); }
 };
 
-// ─── Camera framing presets ───────────────────────────────────────────────────
 function setCameraFraming(mode) {
   currentFraming = mode;
   if      (mode === 'full') { camera.position.set(0, 0.9,  3.2); camera.lookAt(0, 0.9,  0); }
@@ -200,14 +196,12 @@ function fitModel(model) {
   camera.lookAt(centre);
 }
 
-// ─── Resize ───────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ─── Idle animation ───────────────────────────────────────────────────────────
 function tickIdle(delta) {
   if (!currentVRM) return;
   const em = currentVRM.expressionManager;
@@ -216,6 +210,7 @@ function tickIdle(delta) {
   idle.breathPhase += delta * 0.35;
   const b = Math.sin(idle.breathPhase * Math.PI * 2) * 0.025;
   if (hb) {
+    // Spine/chest/head — breath sway
     applyBone(hb, 'spine', b, 0, 0);
     applyBone(hb, 'chest', b * 0.4, 0, 0);
     applyBone(hb, 'head',
@@ -223,6 +218,13 @@ function tickIdle(delta) {
       Math.sin(idle.breathPhase * Math.PI * 2 * 0.37) * 0.008,
       0
     );
+    // Arms — re-applied every frame so vrm.update() cannot reset to bind pose.
+    // Subtle idle sway added on top of the relaxed position.
+    const armSway = Math.sin(idle.breathPhase * Math.PI * 2 * 0.5) * 0.015;
+    applyBone(hb, 'leftUpperArm',  0, armSway,   1.15);
+    applyBone(hb, 'rightUpperArm', 0, -armSway, -1.15);
+    applyBone(hb, 'leftLowerArm',  0, 0,         0.25);
+    applyBone(hb, 'rightLowerArm', 0, 0,        -0.25);
   }
   if (em) {
     idle.blinkTimer += delta;
@@ -258,6 +260,22 @@ function safeSet(em, name, v) {
   try { em.setValue(name, v); } catch (_) {}
 }
 
+// ─── Relaxed pose ─────────────────────────────────────────────────────────────
+// Sets arms to a natural resting position immediately after model load.
+// Called once on load; tickIdle() re-applies arms every frame to prevent reset.
+function applyRelaxedPose(vrm) {
+  const hb = vrm.humanoid;
+  if (!hb) return;
+  const leftUpper  = hb.getNormalizedBoneNode('leftUpperArm');
+  const rightUpper = hb.getNormalizedBoneNode('rightUpperArm');
+  const leftLower  = hb.getNormalizedBoneNode('leftLowerArm');
+  const rightLower = hb.getNormalizedBoneNode('rightLowerArm');
+  if (leftUpper)  { leftUpper.rotation.set(0,  0,  1.15); }
+  if (rightUpper) { rightUpper.rotation.set(0, 0, -1.15); }
+  if (leftLower)  { leftLower.rotation.set(0,  0,  0.25); }
+  if (rightLower) { rightLower.rotation.set(0, 0, -0.25); }
+}
+
 // ─── Render loop ──────────────────────────────────────────────────────────────
 function animate() {
   requestAnimationFrame(animate);
@@ -266,7 +284,6 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-// ─── Boot ─────────────────────────────────────────────────────────────────────
 window.addEventListener('error',              e => notifyKotlin('onModelError', e.message));
 window.addEventListener('unhandledrejection', e => notifyKotlin('onModelError', String(e.reason)));
 
