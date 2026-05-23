@@ -17,43 +17,31 @@
     height: 100% !important;
     background: transparent;
   }
-  #status {
-    position: fixed;
-    bottom: 4px; left: 0; right: 0;
-    text-align: center;
-    font: 10px/1.4 monospace;
-    color: rgba(255,255,255,0.7);
-    pointer-events: none;
-    text-shadow: 0 1px 3px #000;
-  }
 </style>
-
 <script type="importmap">
 {
   "imports": {
-    "three":              "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
-    "three/addons/":      "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/",
-    "@pixiv/three-vrm":   "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.2/lib/three-vrm.module.min.js"
+    "three":            "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+    "three/addons/":    "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/",
+    "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.2/lib/three-vrm.module.min.js"
   }
 }
 </script>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="status">Loading…</div>
 
 <script type="module">
-import * as THREE                        from 'three';
-import { GLTFLoader }                    from 'three/addons/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin, VRMUtils }     from '@pixiv/three-vrm';
+import * as THREE                    from 'three';
+import { GLTFLoader }                from 'three/addons/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
-const statusEl = document.getElementById('status');
-function setStatus(msg) { statusEl.textContent = msg; }
-
+// ── Kotlin bridge ─────────────────────────────────────────────────────────────
 function notifyKotlin(method, arg) {
-  try { window.AndroidBridge[method](arg); } catch (_) {}
+  try { window.AndroidBridge[method](arg ?? ''); } catch (_) {}
 }
 
+// ── Renderer / scene ──────────────────────────────────────────────────────────
 const canvas   = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -66,6 +54,7 @@ const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerH
 let currentFraming = 'bust';
 setCameraFraming('bust');
 
+// Lighting
 scene.add(new THREE.HemisphereLight(0xffffff, 0x8888aa, 0.8));
 const keyLight = new THREE.DirectionalLight(0xfff5e0, 1.2);
 keyLight.position.set(1.2, 2, 1.5);
@@ -78,107 +67,291 @@ const loader = new GLTFLoader();
 loader.register(parser => new VRMLoaderPlugin(parser, { autoUpdateHumanBones: true }));
 
 let currentVRM   = null;
-let currentModel = null;
-const clock = new THREE.Clock();
-const idle  = {
-  breathPhase: 0, blinkTimer: 0, nextBlink: 3,
-  blinkActive: false, blinkT: 0
+const clock      = new THREE.Clock();
+
+// ── Animation state machine ───────────────────────────────────────────────────
+// States: IDLE | THINKING | SPEAKING | REACTING
+const AnimState = { IDLE: 'IDLE', THINKING: 'THINKING', SPEAKING: 'SPEAKING', REACTING: 'REACTING' };
+let animState      = AnimState.IDLE;
+let stateTimer     = 0;
+let reactEmotion   = null;  // PetEmotion name during REACTING
+
+// ── Perlin-ish noise (simple) ─────────────────────────────────────────────────
+function noise(t, freq, seed) {
+  return Math.sin(t * freq + seed) * 0.5 +
+         Math.sin(t * freq * 1.7 + seed * 2.3) * 0.3 +
+         Math.sin(t * freq * 3.1 + seed * 5.7) * 0.2;
+}
+
+// ── Idle data ─────────────────────────────────────────────────────────────────
+const idle = {
+  time: 0,
+  // Blink
+  blinkTimer: 0, nextBlink: 2.5,
+  blinkActive: false, blinkT: 0,
+  doubleBlink: false, doublePhase: 0,
+  // Eye gaze saccade
+  gazeX: 0, gazeY: 0,
+  gazeTimer: 0, nextGaze: 3,
+  targetGazeX: 0, targetGazeY: 0,
+  // Hip / weight shift
+  weightPhase: 0, weightSide: 1,
+  weightTimer: 0, nextWeight: 8,
+  // Mouth idle (occasional aa parting)
+  mouthTimer: 0, nextMouth: 12,
+  mouthActive: false, mouthT: 0
 };
-let activeExpressionName   = null;
-let activeExpressionWeight = 0;
 
-window.AvatarAPI = {
+// Speaking: cycle mouth vowel shapes
+const VOWELS   = ['aa','ih','ou','ee','oh'];
+const speak    = { timer: 0, idx: 0, rate: 0.12, weight: 0 };
 
-  loadModel(url) {
-    setStatus('Loading…');
+// Thinking: head tilt + OU
+const think    = { tiltDir: 1 };
 
-    if (currentModel) {
-      scene.remove(currentModel);
-      if (currentVRM) VRMUtils.deepDispose(currentVRM.scene);
-      currentVRM = null;
-      currentModel = null;
-    }
+// ── Expression priority blending ──────────────────────────────────────────────
+// priority: emotion > idle blink > idle mouth
+let activeEmotionName   = null;
+let activeEmotionWeight = 0;
+const EMOTIONAL_EXPRESSIONS = ['happy','angry','sad','surprised','relaxed'];
+const MOUTH_SHAPES          = ['aa','ih','ou','ee','oh'];
+const BLINK_SHAPES          = ['blink','blinkLeft','blinkRight'];
 
-    loader.load(
-      url,
-      gltf => {
-        try {
-          const vrm = gltf.userData.vrm;
-          if (!vrm) {
-            currentModel = gltf.scene;
-            scene.add(currentModel);
-            fitModel(currentModel);
-            setStatus('');
-            notifyKotlin('onModelLoaded', gltf.scene.name || 'model.glb');
-            return;
-          }
-          currentVRM   = vrm;
-          currentModel = vrm.scene;
-          VRMUtils.rotateVRM0(vrm);
-          scene.add(currentModel);
-          Object.assign(idle, {
-            breathPhase: 0, blinkTimer: 0, nextBlink: 3,
-            blinkActive: false, blinkT: 0
-          });
-          // ── T-pose fix: arms start at bind pose (hands straight out).
-          // applyRelaxedPose() sets the initial rest position.
-          // tickIdle() re-applies it every frame so vrm.update() can't reset it.
-          applyRelaxedPose(vrm);
-          activeExpressionName = null;
-          activeExpressionWeight = 0;
-          setCameraFraming(currentFraming);
-          setStatus('');
-          const name = vrm.meta?.title || vrm.meta?.name || 'avatar.vrm';
-          notifyKotlin('onModelLoaded', name);
-        } catch (e) {
-          setStatus('Error: ' + e.message);
-          notifyKotlin('onModelError', e.message);
+function safeSet(em, name, v) {
+  try { em.setValue(name, Math.max(0, Math.min(1, v))); } catch (_) {}
+}
+function safeBone(hb, name, rx, ry, rz) {
+  try {
+    const b = hb.getNormalizedBoneNode(name);
+    if (b) { b.rotation.x = rx; b.rotation.y = ry; b.rotation.z = rz; }
+  } catch (_) {}
+}
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// ── Main tick ─────────────────────────────────────────────────────────────────
+function tickIdle(delta) {
+  if (!currentVRM) return;
+  const em = currentVRM.expressionManager;
+  const hb = currentVRM.humanoid;
+  idle.time += delta;
+
+  // ── 1. BASE POSE: arms always relaxed ─────────────────────────────────────
+  if (hb) {
+    const sway = noise(idle.time, 0.5, 0) * 0.015;
+    safeBone(hb, 'leftUpperArm',  0,  sway,   1.15);
+    safeBone(hb, 'rightUpperArm', 0, -sway,  -1.15);
+    safeBone(hb, 'leftLowerArm',  0,  0,      0.25);
+    safeBone(hb, 'rightLowerArm', 0,  0,     -0.25);
+  }
+
+  // ── 2. STATE-SPECIFIC BODY ANIMATION ─────────────────────────────────────
+  stateTimer += delta;
+  if (hb) {
+    switch (animState) {
+
+      case AnimState.IDLE: {
+        // Breathing — spine/chest
+        const breath = Math.sin(idle.time * 0.35 * Math.PI * 2) * 0.025;
+        safeBone(hb, 'spine', breath, 0, 0);
+        safeBone(hb, 'chest', breath * 0.4, 0, 0);
+
+        // Organic head drift
+        const hx = noise(idle.time, 0.18, 1.0) * 0.025;
+        const hy = noise(idle.time, 0.13, 2.5) * 0.018;
+        safeBone(hb, 'head', hx, hy, noise(idle.time, 0.09, 4.2) * 0.012);
+
+        // Hip weight shift
+        idle.weightTimer += delta;
+        if (idle.weightTimer >= idle.nextWeight) {
+          idle.weightSide  = -idle.weightSide;
+          idle.weightPhase = 0;
+          idle.weightTimer = 0;
+          idle.nextWeight  = 6 + Math.random() * 8;
         }
-      },
-      xhr => {
-        if (xhr.total) {
-          setStatus('Loading… ' + Math.round(xhr.loaded / xhr.total * 100) + '%');
-        }
-      },
-      err => {
-        const msg = err?.message || String(err);
-        setStatus('Error: ' + msg);
-        notifyKotlin('onModelError', msg);
+        idle.weightPhase = Math.min(idle.weightPhase + delta * 0.5, 1);
+        const hipZ = idle.weightSide * idle.weightPhase * 0.025;
+        safeBone(hb, 'hips', 0, 0, hipZ);
+
+        break;
       }
-    );
-  },
 
-  playExpression(name, weight, durationSec) {
-    if (!currentVRM?.expressionManager) return;
-    activeExpressionName   = name;
-    activeExpressionWeight = weight;
-    if (durationSec > 0) {
-      setTimeout(() => {
-        if (activeExpressionName === name) {
-          activeExpressionName = null;
-          activeExpressionWeight = 0;
+      case AnimState.THINKING: {
+        // Head tilt to one side, slight nod
+        const tiltTarget = think.tiltDir * 0.12;
+        const noddle     = Math.sin(stateTimer * 1.1) * 0.02;
+        safeBone(hb, 'head', noddle, 0, tiltTarget);
+        safeBone(hb, 'spine', 0.015, 0, 0);
+        safeBone(hb, 'hips',  0, 0, 0);
+        // Slightly raised shoulder on tilt side
+        if (think.tiltDir > 0) {
+          safeBone(hb, 'leftUpperArm',  0,  0,  1.05);
+          safeBone(hb, 'rightUpperArm', 0,  0, -1.15);
+        } else {
+          safeBone(hb, 'leftUpperArm',  0,  0,  1.15);
+          safeBone(hb, 'rightUpperArm', 0,  0, -1.05);
         }
-      }, durationSec * 1000);
+        break;
+      }
+
+      case AnimState.SPEAKING: {
+        // Animated head nod + small gestures
+        const nod   = Math.sin(stateTimer * 2.1) * 0.03;
+        const turn  = Math.sin(stateTimer * 1.3) * 0.025;
+        safeBone(hb, 'head',  nod, turn, 0);
+        safeBone(hb, 'spine', 0.02 + Math.abs(nod) * 0.5, 0, 0);
+        // Gentle hand gesture on one side
+        const gesture = Math.sin(stateTimer * 1.8) * 0.06;
+        safeBone(hb, 'leftUpperArm',  0,  gesture, 1.15);
+        safeBone(hb, 'rightUpperArm', 0, -gesture, -1.15);
+        break;
+      }
+
+      case AnimState.REACTING: {
+        const e = reactEmotion || 'neutral';
+        const t = Math.min(stateTimer / 0.4, 1); // snap in quickly
+
+        if (e === 'happy' || e === 'relaxed') {
+          // Lean forward + head up + bounce
+          const bounce = Math.sin(stateTimer * 4) * 0.02 * Math.max(0, 1 - stateTimer * 0.5);
+          safeBone(hb, 'spine', -0.04 + bounce, 0, 0);
+          safeBone(hb, 'chest', -0.02, 0, 0);
+          safeBone(hb, 'head',  -0.05 * t + bounce, 0, 0);
+          // Arms open slightly
+          safeBone(hb, 'leftUpperArm',  0, 0,  0.9);
+          safeBone(hb, 'rightUpperArm', 0, 0, -0.9);
+        } else if (e === 'surprised') {
+          // Pull back + head back + arms up
+          safeBone(hb, 'spine', -0.03 * t, 0, 0);
+          safeBone(hb, 'head',  -0.08 * t, 0, 0);
+          safeBone(hb, 'leftUpperArm',  0, 0,  0.75);
+          safeBone(hb, 'rightUpperArm', 0, 0, -0.75);
+        } else if (e === 'sad') {
+          // Hunch over, head down
+          safeBone(hb, 'spine', 0.06 * t, 0, 0);
+          safeBone(hb, 'chest', 0.04 * t, 0, 0);
+          safeBone(hb, 'head',  0.08 * t, 0, 0);
+          safeBone(hb, 'leftUpperArm',  0, 0,  1.3);
+          safeBone(hb, 'rightUpperArm', 0, 0, -1.3);
+        } else if (e === 'angry') {
+          // Lean forward, head forward
+          const tremble = Math.sin(stateTimer * 12) * 0.008 * Math.max(0, 1 - stateTimer);
+          safeBone(hb, 'spine', -0.05 * t + tremble, 0, 0);
+          safeBone(hb, 'head',  -0.06 * t, 0, 0);
+          safeBone(hb, 'leftUpperArm',  0, 0,  1.0);
+          safeBone(hb, 'rightUpperArm', 0, 0, -1.0);
+        } else {
+          // Neutral — normal breathing
+          const breath2 = Math.sin(idle.time * 0.35 * Math.PI * 2) * 0.02;
+          safeBone(hb, 'spine', breath2, 0, 0);
+          safeBone(hb, 'head',  0, 0, 0);
+        }
+        break;
+      }
     }
-  },
+  }
 
-  resetExpression() {
-    activeExpressionName = null;
-    activeExpressionWeight = 0;
-    if (!currentVRM?.expressionManager) return;
-    ['happy','angry','sad','surprised','relaxed',
-     'blink','blinkLeft','blinkRight','aa','ih','ou','ee','oh']
-      .forEach(n => { try { currentVRM.expressionManager.setValue(n, 0); } catch (_) {} });
-  },
+  if (!em) return;
 
-  lookAt(nx, ny) {
-    if (!currentVRM?.lookAt) return;
-    currentVRM.lookAt.target = new THREE.Vector3((nx - 0.5) * 2, -(ny - 0.5) * 2 + 1.5, 2);
-  },
+  // ── 3. EYE GAZE SACCADE ───────────────────────────────────────────────────
+  if (currentVRM.lookAt) {
+    idle.gazeTimer += delta;
+    if (idle.gazeTimer >= idle.nextGaze) {
+      idle.targetGazeX = (Math.random() - 0.5) * 0.3;
+      idle.targetGazeY = (Math.random() - 0.5) * 0.15;
+      idle.gazeTimer   = 0;
+      idle.nextGaze    = 2 + Math.random() * 4;
+    }
+    idle.gazeX = lerp(idle.gazeX, idle.targetGazeX, delta * 3);
+    idle.gazeY = lerp(idle.gazeY, idle.targetGazeY, delta * 3);
+    currentVRM.lookAt.target = new THREE.Vector3(
+      idle.gazeX, 1.5 + idle.gazeY, 2
+    );
+  }
 
-  setFraming(mode) { setCameraFraming(mode); }
-};
+  // ── 4. BLINK ──────────────────────────────────────────────────────────────
+  idle.blinkTimer += delta;
+  if (!idle.blinkActive && idle.blinkTimer >= idle.nextBlink) {
+    idle.blinkActive = true;
+    idle.blinkT      = 0;
+    idle.doubleBlink = Math.random() < 0.15;
+    idle.doublePhase = 0;
+    idle.nextBlink   = idle.blinkTimer + 2 + Math.random() * 4;
+  }
+  let blinkW = 0;
+  if (idle.blinkActive) {
+    idle.blinkT += delta;
+    const D = 0.12;
+    if (!idle.doubleBlink) {
+      blinkW = idle.blinkT < D * 0.5
+        ? idle.blinkT / (D * 0.5)
+        : idle.blinkT < D ? 1 - (idle.blinkT - D * 0.5) / (D * 0.5) : 0;
+      if (idle.blinkT >= D) idle.blinkActive = false;
+    } else {
+      // two quick blinks
+      const t = idle.blinkT;
+      const phase1 = t < D ? (t < D*0.5 ? t/(D*0.5) : 1-(t-D*0.5)/(D*0.5)) : 0;
+      const phase2 = t > D*1.5 && t < D*2.5
+        ? ((t-D*1.5) < D*0.5 ? (t-D*1.5)/(D*0.5) : 1-(t-D*2)/(D*0.5)) : 0;
+      blinkW = Math.max(phase1, phase2);
+      if (t >= D * 2.5) idle.blinkActive = false;
+    }
+  }
+  BLINK_SHAPES.forEach(n => safeSet(em, n, blinkW));
 
+  // ── 5. EMOTION EXPRESSIONS (with priority) ─────────────────────────────────
+  EMOTIONAL_EXPRESSIONS.forEach(n => safeSet(em, n, 0));
+  if (activeEmotionName && EMOTIONAL_EXPRESSIONS.includes(activeEmotionName)) {
+    safeSet(em, activeEmotionName, activeEmotionWeight);
+  }
+
+  // ── 6. MOUTH ──────────────────────────────────────────────────────────────
+  MOUTH_SHAPES.forEach(n => safeSet(em, n, 0));
+
+  if (animState === AnimState.SPEAKING) {
+    // Cycle through vowel shapes
+    speak.timer += delta;
+    if (speak.timer >= speak.rate) {
+      speak.timer = 0;
+      speak.idx   = (speak.idx + 1) % VOWELS.length;
+      // randomise rate slightly for realism
+      speak.rate  = 0.08 + Math.random() * 0.10;
+    }
+    const mw = 0.4 + Math.sin(idle.time * 8) * 0.25;
+    safeSet(em, VOWELS[speak.idx], Math.max(0, mw));
+
+  } else if (animState === AnimState.THINKING) {
+    // Slight OU (thinking face)
+    safeSet(em, 'ou', 0.3 + Math.sin(idle.time * 2) * 0.1);
+
+  } else {
+    // Idle mouth: occasional small aa
+    idle.mouthTimer += delta;
+    if (!idle.mouthActive && idle.mouthTimer >= idle.nextMouth) {
+      idle.mouthActive = true;
+      idle.mouthT      = 0;
+      idle.nextMouth   = idle.mouthTimer + 8 + Math.random() * 15;
+    }
+    if (idle.mouthActive) {
+      idle.mouthT += delta;
+      const md = 0.4;
+      const mw = idle.mouthT < md * 0.5
+        ? idle.mouthT / (md * 0.5)
+        : idle.mouthT < md ? 1 - (idle.mouthT - md * 0.5) / (md * 0.5) : 0;
+      if (idle.mouthT >= md) idle.mouthActive = false;
+      safeSet(em, 'aa', mw * 0.45);
+    }
+  }
+}
+
+// ── Render loop ───────────────────────────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = Math.min(clock.getDelta(), 0.05);
+  if (currentVRM) { tickIdle(delta); currentVRM.update(delta); }
+  renderer.render(scene, camera);
+}
+
+// ── Camera framing ────────────────────────────────────────────────────────────
 function setCameraFraming(mode) {
   currentFraming = mode;
   if      (mode === 'full') { camera.position.set(0, 0.9,  3.2); camera.lookAt(0, 0.9,  0); }
@@ -186,14 +359,17 @@ function setCameraFraming(mode) {
   else                      { camera.position.set(0, 1.35, 1.8); camera.lookAt(0, 1.35, 0); }
 }
 
-function fitModel(model) {
-  const box    = new THREE.Box3().setFromObject(model);
-  const centre = box.getCenter(new THREE.Vector3());
-  const size   = box.getSize(new THREE.Vector3());
-  const dist   = Math.max(size.x, size.y, size.z) /
-                 (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
-  camera.position.set(centre.x, centre.y, centre.z + dist * 1.2);
-  camera.lookAt(centre);
+// ── Model loading ─────────────────────────────────────────────────────────────
+function applyRelaxedPose(vrm) {
+  const hb = vrm.humanoid;
+  if (!hb) return;
+  [['leftUpperArm',  0,  0,  1.15],
+   ['rightUpperArm', 0,  0, -1.15],
+   ['leftLowerArm',  0,  0,  0.25],
+   ['rightLowerArm', 0,  0, -0.25]].forEach(([n, rx, ry, rz]) => {
+     const b = hb.getNormalizedBoneNode(n);
+     if (b) b.rotation.set(rx, ry, rz);
+   });
 }
 
 window.addEventListener('resize', () => {
@@ -202,92 +378,116 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-function tickIdle(delta) {
-  if (!currentVRM) return;
-  const em = currentVRM.expressionManager;
-  const hb = currentVRM.humanoid;
+// ── Public API ────────────────────────────────────────────────────────────────
+window.AvatarAPI = {
 
-  idle.breathPhase += delta * 0.35;
-  const b = Math.sin(idle.breathPhase * Math.PI * 2) * 0.025;
-  if (hb) {
-    // Spine/chest/head — breath sway
-    applyBone(hb, 'spine', b, 0, 0);
-    applyBone(hb, 'chest', b * 0.4, 0, 0);
-    applyBone(hb, 'head',
-      Math.sin(idle.breathPhase * Math.PI * 2 * 0.5)  * 0.012,
-      Math.sin(idle.breathPhase * Math.PI * 2 * 0.37) * 0.008,
-      0
+  loadModel(url) {
+    if (currentVRM) {
+      scene.remove(currentVRM.scene);
+      VRMUtils.deepDispose(currentVRM.scene);
+      currentVRM = null;
+    }
+    loader.load(
+      url,
+      gltf => {
+        try {
+          const vrm = gltf.userData.vrm;
+          if (!vrm) {
+            scene.add(gltf.scene);
+            notifyKotlin('onModelLoaded', 'model.glb');
+            return;
+          }
+          VRMUtils.rotateVRM0(vrm);
+          currentVRM = vrm;
+          scene.add(vrm.scene);
+          Object.assign(idle, {
+            time: 0, blinkTimer: 0, nextBlink: 2.5,
+            blinkActive: false, gazeTimer: 0, nextGaze: 3,
+            gazeX: 0, gazeY: 0, weightTimer: 0, nextWeight: 8,
+            mouthTimer: 0, nextMouth: 12, mouthActive: false
+          });
+          applyRelaxedPose(vrm);
+          animState     = AnimState.IDLE;
+          stateTimer    = 0;
+          reactEmotion  = null;
+          activeEmotionName   = null;
+          activeEmotionWeight = 0;
+          setCameraFraming(currentFraming);
+          notifyKotlin('onModelLoaded', vrm.meta?.title || vrm.meta?.name || 'avatar.vrm');
+        } catch (e) {
+          notifyKotlin('onModelError', e.message);
+        }
+      },
+      xhr => { if (xhr.total) notifyKotlin('onDebugMessage', 'Load ' + Math.round(xhr.loaded/xhr.total*100) + '%'); },
+      err => notifyKotlin('onModelError', err?.message || String(err))
     );
-    // Arms — re-applied every frame so vrm.update() cannot reset to bind pose.
-    // Subtle idle sway added on top of the relaxed position.
-    const armSway = Math.sin(idle.breathPhase * Math.PI * 2 * 0.5) * 0.015;
-    applyBone(hb, 'leftUpperArm',  0, armSway,   1.15);
-    applyBone(hb, 'rightUpperArm', 0, -armSway, -1.15);
-    applyBone(hb, 'leftLowerArm',  0, 0,         0.25);
-    applyBone(hb, 'rightLowerArm', 0, 0,        -0.25);
-  }
-  if (em) {
-    idle.blinkTimer += delta;
-    if (!idle.blinkActive && idle.blinkTimer >= idle.nextBlink) {
-      idle.blinkActive = true;
-      idle.blinkT      = 0;
-      idle.nextBlink   = idle.blinkTimer + 2.5 + Math.random() * 4;
+  },
+
+  // Called by Kotlin when LLM starts thinking
+  setThinking() {
+    animState    = AnimState.THINKING;
+    stateTimer   = 0;
+    think.tiltDir = Math.random() < 0.5 ? 1 : -1;
+  },
+
+  // Called by Kotlin when speech text arrives — starts speaking animation
+  setSpeaking() {
+    animState  = AnimState.SPEAKING;
+    stateTimer = 0;
+    speak.timer = 0;
+    speak.idx   = 0;
+  },
+
+  // Called by Kotlin when speech ends or to return to idle
+  setIdle() {
+    animState  = AnimState.IDLE;
+    stateTimer = 0;
+  },
+
+  // Called when an emotion reaction fires (from DroneSwarm / ReactionEngine)
+  playExpression(name, weight, durationSec) {
+    if (!currentVRM?.expressionManager) return;
+    activeEmotionName   = name;
+    activeEmotionWeight = weight ?? 1.0;
+
+    // Switch body to REACTING state
+    reactEmotion = name;
+    animState    = AnimState.REACTING;
+    stateTimer   = 0;
+
+    if (durationSec > 0) {
+      setTimeout(() => {
+        if (activeEmotionName === name) {
+          activeEmotionName   = null;
+          activeEmotionWeight = 0;
+        }
+        if (animState === AnimState.REACTING && reactEmotion === name) {
+          animState    = AnimState.IDLE;
+          reactEmotion = null;
+        }
+      }, durationSec * 1000);
     }
-    if (idle.blinkActive) {
-      idle.blinkT += delta;
-      const D = 0.12;
-      let w = idle.blinkT < D * 0.5
-        ? idle.blinkT / (D * 0.5)
-        : idle.blinkT < D
-          ? 1 - (idle.blinkT - D * 0.5) / (D * 0.5)
-          : 0;
-      if (idle.blinkT >= D) { w = 0; idle.blinkActive = false; }
-      ['blink','blinkLeft','blinkRight'].forEach(n => safeSet(em, n, w));
-    } else {
-      ['blink','blinkLeft','blinkRight'].forEach(n => safeSet(em, n, 0));
-    }
-    if (activeExpressionName) safeSet(em, activeExpressionName, activeExpressionWeight);
-  }
-}
+  },
 
-function applyBone(hb, name, rx, ry, rz) {
-  try {
-    const b = hb.getNormalizedBoneNode(name);
-    if (b) { b.rotation.x = rx; b.rotation.y = ry; b.rotation.z = rz; }
-  } catch (_) {}
-}
-function safeSet(em, name, v) {
-  try { em.setValue(name, v); } catch (_) {}
-}
+  resetExpression() {
+    activeEmotionName   = null;
+    activeEmotionWeight = 0;
+    animState           = AnimState.IDLE;
+    reactEmotion        = null;
+  },
 
-// ─── Relaxed pose ─────────────────────────────────────────────────────────────
-// Sets arms to a natural resting position immediately after model load.
-// Called once on load; tickIdle() re-applies arms every frame to prevent reset.
-function applyRelaxedPose(vrm) {
-  const hb = vrm.humanoid;
-  if (!hb) return;
-  const leftUpper  = hb.getNormalizedBoneNode('leftUpperArm');
-  const rightUpper = hb.getNormalizedBoneNode('rightUpperArm');
-  const leftLower  = hb.getNormalizedBoneNode('leftLowerArm');
-  const rightLower = hb.getNormalizedBoneNode('rightLowerArm');
-  if (leftUpper)  { leftUpper.rotation.set(0,  0,  1.15); }
-  if (rightUpper) { rightUpper.rotation.set(0, 0, -1.15); }
-  if (leftLower)  { leftLower.rotation.set(0,  0,  0.25); }
-  if (rightLower) { rightLower.rotation.set(0, 0, -0.25); }
-}
+  lookAt(nx, ny) {
+    if (!currentVRM?.lookAt) return;
+    idle.targetGazeX = (nx - 0.5) * 0.4;
+    idle.targetGazeY = -(ny - 0.5) * 0.2;
+  },
 
-// ─── Render loop ──────────────────────────────────────────────────────────────
-function animate() {
-  requestAnimationFrame(animate);
-  const delta = Math.min(clock.getDelta(), 0.05);
-  if (currentVRM) { tickIdle(delta); currentVRM.update(delta); }
-  renderer.render(scene, camera);
-}
+  setFraming(mode) { setCameraFraming(mode); }
+};
 
-window.addEventListener('error',              e => notifyKotlin('onModelError', e.message));
-window.addEventListener('unhandledrejection', e => notifyKotlin('onModelError', String(e.reason)));
+window.addEventListener('error',              e => notifyKotlin('onModelError',  e.message));
+window.addEventListener('unhandledrejection', e => notifyKotlin('onModelError',  String(e.reason)));
 
-setStatus('');
 animate();
 notifyKotlin('onRendererReady', '');
 </script>
