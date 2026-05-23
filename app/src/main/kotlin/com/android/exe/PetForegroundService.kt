@@ -232,7 +232,7 @@ class PetForegroundService : LifecycleService() {
         val memories = db.petMemoryDao().getRecent(p.id)
         val history  = db.interactionHistoryDao().getRecent(p.id)
 
-        overlayManager?.sayLlmThinking()
+        overlayManager?.onLlmThinking()
 
         try {
             var accumulated = ""
@@ -246,14 +246,13 @@ class PetForegroundService : LifecycleService() {
                 onToken = { token ->
                     accumulated += token
                     val snap = accumulated
-                    mainHandler.post { overlayManager?.showSpeechBubble(snap, 8000L) }
+                    mainHandler.post { overlayManager?.onLlmToken(snap) }
                 }
             )
             withContext(Dispatchers.Main) {
                 overlayManager?.playExpression(reaction.emotion)
                 emotionDaemon.currentMood.let { m -> overlayManager?.onMoodChanged(m.valence, m.arousal) }
-                overlayManager?.showSpeechBubble(reaction.text, 6000L)
-                overlayManager?.sayLlmDone()
+                overlayManager?.onLlmDone(reaction.text)
             }
             emotionDaemon.onEvent(MoodEvent.ReactionComplete)
             db.interactionHistoryDao().insert(reaction.record)
@@ -261,7 +260,7 @@ class PetForegroundService : LifecycleService() {
             db.interactionHistoryDao().pruneOld(p.id)
         } catch (e: Exception) {
             Log.e(TAG, "Reaction failed", e)
-            overlayManager?.sayLlmError(e.message ?: "error")
+            overlayManager?.onLlmError(e.message ?: "error")
             emotionDaemon.onEvent(MoodEvent.InferenceError)
         }
     }
