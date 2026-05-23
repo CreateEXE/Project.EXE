@@ -44,11 +44,11 @@ class PetForegroundService : LifecycleService() {
     private val soulManager    by lazy { FaitSoulManager(this) }
     private val reactionEngine by lazy { PetReactionEngine(llama, soulManager) }
 
-    // ── Mood system (DroneSwarm handles expression callbacks into the overlay) ──
+    // ── Mood system ────────────────────────────────────────────────────────────
     private val droneSwarm by lazy {
         DroneSwarm(
-            llama      = llama,
-            memoryDao  = db.petMemoryDao(),
+            llama     = llama,
+            memoryDao = db.petMemoryDao(),
             onExpressionUpdate = { name, weight, durationSec ->
                 mainHandler.post {
                     overlayManager?.avatarView?.evaluateJavascript(
@@ -134,7 +134,6 @@ class PetForegroundService : LifecycleService() {
             }
 
             null -> {
-                // Restarted by OS — reload from database
                 Log.d(TAG, "Restarted by OS — loading from DB")
                 lifecycleScope.launch { initialize(null) }
             }
@@ -153,7 +152,7 @@ class PetForegroundService : LifecycleService() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Initialise everything from the DB
+    // Initialise
     // ─────────────────────────────────────────────────────────────────────────
     private suspend fun initialize(passedAvatarPath: String?) {
         if (!Settings.canDrawOverlays(this)) {
@@ -161,7 +160,6 @@ class PetForegroundService : LifecycleService() {
             stopSelf(); return
         }
 
-        // 1. Ensure a profile exists
         var p = db.petProfileDao().getActive()
         if (p == null) {
             val id = db.petProfileDao().insert(PetProfile(petName = "Exe"))
@@ -172,10 +170,8 @@ class PetForegroundService : LifecycleService() {
         traits  = db.personalityTraitsDao().getForPet(p.id)
         Log.d(TAG, "Profile: ${p.petName}, avatar=${p.avatarPath}, model=${p.llmModelPath}")
 
-        // 2. Initialise soul (copies fait_soul.json from assets on first run)
         soulManager.initialize()
 
-        // 3. Start the mood daemon with the last known mood from DB
         val initialMood = MoodVector(
             valence   = p.currentMood,
             arousal   = p.energyLevel,
@@ -183,11 +179,9 @@ class PetForegroundService : LifecycleService() {
         )
         emotionDaemon.start(p.id, initialMood)
 
-        // 4. Start overlay
         val avatarPath = passedAvatarPath ?: p.avatarPath
         withContext(Dispatchers.Main) { startOverlay(avatarPath) }
 
-        // 5. Load LLM
         p.llmModelPath?.let { path ->
             if (File(path).exists()) {
                 Log.i(TAG, "Loading persisted model: $path")
@@ -198,7 +192,6 @@ class PetForegroundService : LifecycleService() {
             }
         }
 
-        // 6. Subscribe to screen events
         subscribeToScreenEvents()
         Log.i(TAG, "Ready — pet=${p.petName}")
     }
@@ -220,16 +213,13 @@ class PetForegroundService : LifecycleService() {
 
         val p = profile ?: return
 
-        // Fire new-app mood event when the package changes
         emotionDaemon.onEvent(MoodEvent.NewApp)
 
         if (!llama.isLoaded()) {
-            // No model yet — play an idle expression via EmotionDaemon baseline
             droneSwarm.fireAnimationDrone(emotionDaemon.currentMood)
             return
         }
 
-        // Run sentiment on the screen context
         val sentimentScore = droneSwarm.fireSentimentDrone(ctx.summary)
         emotionDaemon.onEvent(MoodEvent.UserSentiment(sentimentScore))
 
@@ -270,7 +260,7 @@ class PetForegroundService : LifecycleService() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Overlay helpers
+    // Overlay
     // ─────────────────────────────────────────────────────────────────────────
     private fun startOverlay(avatarPath: String?) {
         if (overlayManager != null) { Log.w(TAG, "Overlay already running"); return }
@@ -314,4 +304,41 @@ class PetForegroundService : LifecycleService() {
         return NotificationCompat.Builder(this, AndroidExeApp.CHANNEL_ID_PET)
             .setContentTitle("Exe is active")
             .setContentText("Tap to open • Swipe to stop")
-            .setSmallIcon(R.mipmap.ic_launch
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentIntent(openIntent)
+            .addAction(android.R.drawable.ic_delete, "Stop", stopIntent)
+            .build()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // URI helpers
+    // ─────────────────────────────────────────────────────────────────────────
+    private suspend fun resolveAvatarPath(uriStr: String?): String? {
+        if (!uriStr.isNullOrBlank()) {
+            val path = copyUriToCache(android.net.Uri.parse(uriStr), "avatar.vrm")
+            if (path != null) return path
+            Log.w(TAG, "URI copy failed: $uriStr")
+        }
+        val dbPath = db.petProfileDao().getActive()?.avatarPath
+        if (!dbPath.isNullOrBlank() && File(dbPath).exists()) return dbPath
+        val stdFile = File(filesDir, "avatar.vrm")
+        if (stdFile.exists()) return stdFile.absolutePath
+        return null
+    }
+
+    private suspend fun copyUriToCache(uri: android.net.Uri, fileName: String): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                val dest  = File(cacheDir, fileName)
+                val input = contentResolver.openInputStream(uri) ?: return@withContext null
+                java.io.FileOutputStream(dest).use { out -> input.use { it.copyTo(out) } }
+                Log.d(TAG, "Copied $uri → ${dest.absolutePath} (${dest.length()} bytes)")
+                dest.absolutePath
+            } catch (e: Exception) {
+                Log.e(TAG, "copyUriToCache failed for $uri", e)
+                null
+            }
+        }
+}
