@@ -215,6 +215,12 @@ class PetForegroundService : LifecycleService() {
 
         emotionDaemon.onEvent(MoodEvent.NewApp)
 
+        // Motion: react to app switch and current mood
+        overlayManager?.onAppChanged(ctx.activePackage)
+        emotionDaemon.currentMood.let { m ->
+            mainHandler.post { overlayManager?.onMoodChanged(m.valence, m.arousal) }
+        }
+
         if (!llama.isLoaded()) {
             droneSwarm.fireAnimationDrone(emotionDaemon.currentMood)
             return
@@ -245,6 +251,7 @@ class PetForegroundService : LifecycleService() {
             )
             withContext(Dispatchers.Main) {
                 overlayManager?.playExpression(reaction.emotion)
+                emotionDaemon.currentMood.let { m -> overlayManager?.onMoodChanged(m.valence, m.arousal) }
                 overlayManager?.showSpeechBubble(reaction.text, 6000L)
                 overlayManager?.sayLlmDone()
             }
