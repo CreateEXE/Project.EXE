@@ -235,7 +235,7 @@ class PetOverlayManager(private val context: Context) {
 
     /** Call when LLM starts generating. Shows animated thinking dots. */
     fun onLlmThinking() {
-        avatarView?.evaluateJavascript("AvatarAPI.setThinking();", null)
+        avatarView?.setThinking()
         bubbleJob?.cancel()
         bubbleRoot?.visibility = View.VISIBLE
         bubbleText?.visibility = View.GONE
@@ -260,7 +260,7 @@ class PetOverlayManager(private val context: Context) {
             dotsJob?.cancel()
             thinkDots?.visibility = View.GONE
             bubbleText?.visibility = View.VISIBLE
-            avatarView?.evaluateJavascript("AvatarAPI.setSpeaking();", null)
+            avatarView?.setSpeaking()
         }
         bubbleRoot?.visibility = View.VISIBLE
         bubbleText?.text       = accumulated
@@ -277,7 +277,7 @@ class PetOverlayManager(private val context: Context) {
         bubbleJob = scope.launch {
             delay(durationMs)
             bubbleRoot?.visibility = View.GONE
-            avatarView?.evaluateJavascript("AvatarAPI.setIdle();", null)
+            avatarView?.setIdle()
         }
     }
 
@@ -288,7 +288,7 @@ class PetOverlayManager(private val context: Context) {
         bubbleText?.text       = "⚠ $error"
         bubbleText?.visibility = View.VISIBLE
         bubbleRoot?.visibility = View.VISIBLE
-        avatarView?.evaluateJavascript("AvatarAPI.setIdle();", null)
+        avatarView?.setIdle()
         bubbleJob?.cancel()
         bubbleJob = scope.launch {
             delay(4000)
