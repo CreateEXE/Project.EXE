@@ -9,6 +9,17 @@ import android.webkit.*
 import com.android.exe.ai.PetEmotion
 import java.io.File
 
+/**
+ * Hosts the Three.js / three-vrm avatar renderer in a WebView.
+ *
+ * Key design:
+ *  - LocalFileServer starts immediately in init() and serves the HTML at /
+ *    and the model at /model from http://127.0.0.1.
+ *  - WebView loads http://127.0.0.1:PORT/ — NOT file:///android_asset/.
+ *    This lets ES-module CDN imports work (file:// blocks cross-origin module fetches).
+ *  - When a model is set, we tell the server about the file and call
+ *    AvatarAPI.loadModel('/model') in JS. No base64 encoding, no data URIs.
+ */
 @SuppressLint("SetJavaScriptEnabled", "ViewConstructor")
 class AvatarWebView(context: android.content.Context) : WebView(context) {
 
@@ -24,16 +35,16 @@ class AvatarWebView(context: android.content.Context) : WebView(context) {
     }
 
     var listener: Listener? = null
-    private var pendingModelUrl: String? = null
-    private var rendererReady   = false
+    private var pendingModelPath: String? = null
+    private var rendererReady = false
 
-    // One server per WebView lifetime — stopped in destroy()
-    private var fileServer: LocalFileServer? = null
-
+    private val fileServer = LocalFileServer(context)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val readyGuard  = Runnable {
+
+    // Fallback: if JS never signals ready after 12 s, unblock anyway
+    private val readyGuard = Runnable {
         if (!rendererReady) {
-            Log.w(TAG, "Ready guard fired — JS never called onRendererReady. Unblocking.")
+            Log.w(TAG, "Ready guard fired — forcing ready")
             markReady()
         }
     }
@@ -44,201 +55,137 @@ class AvatarWebView(context: android.content.Context) : WebView(context) {
             domStorageEnabled                = true
             allowFileAccess                  = true
             allowContentAccess               = true
-            @Suppress("DEPRECATION")
-            allowFileAccessFromFileURLs      = true
-            @Suppress("DEPRECATION")
-            allowUniversalAccessFromFileURLs = true
+            @Suppress("DEPRECATION") allowFileAccessFromFileURLs      = true
+            @Suppress("DEPRECATION") allowUniversalAccessFromFileURLs = true
             mixedContentMode                 = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            cacheMode                        = WebSettings.LOAD_DEFAULT
+            cacheMode                        = WebSettings.LOAD_NO_CACHE
             mediaPlaybackRequiresUserGesture = false
         }
 
         setBackgroundColor(0x00000000)
         background?.alpha = 0
 
-        addJavascriptInterface(AndroidBridge(), "AndroidBridge")
+        addJavascriptInterface(Bridge(), "AndroidBridge")
 
         webViewClient = object : WebViewClient() {
-            override fun onReceivedError(
-                view: WebView?, request: WebResourceRequest?, error: WebResourceError?
-            ) {
-                val msg = "Resource error: ${error?.description} url=${request?.url}"
-                Log.e(TAG, msg)
-                listener?.onDebugMessage("❌ $msg")
-            }
             override fun onPageFinished(view: WebView?, url: String?) {
                 Log.d(TAG, "Page finished: $url")
                 listener?.onDebugMessage("✓ Page loaded")
+            }
+            override fun onReceivedError(
+                view: WebView?, request: WebResourceRequest?, error: WebResourceError?
+            ) {
+                val msg = "WebView error: ${error?.description} ${request?.url}"
+                Log.e(TAG, msg)
+                listener?.onDebugMessage("❌ $msg")
+            }
+            override fun onReceivedHttpError(
+                view: WebView?, request: WebResourceRequest?, response: WebResourceResponse?
+            ) {
+                Log.w(TAG, "HTTP ${response?.statusCode} for ${request?.url}")
             }
         }
 
         webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
-                val text = msg?.message() ?: return false
+                val text  = msg?.message() ?: return false
                 val level = msg.messageLevel()
                 when (level) {
                     ConsoleMessage.MessageLevel.ERROR   -> Log.e(TAG, "JS: $text")
                     ConsoleMessage.MessageLevel.WARNING -> Log.w(TAG, "JS: $text")
-                    else                                -> Log.d(TAG, "JS: $text")
+                    else                               -> Log.v(TAG, "JS: $text")
                 }
-                listener?.onDebugMessage(text.take(60))
+                if (level == ConsoleMessage.MessageLevel.ERROR)
+                    listener?.onDebugMessage("❌ ${text.take(80)}")
                 return true
             }
         }
 
-        loadUrl("file:///android_asset/avatar_renderer.html")
-        mainHandler.postDelayed(readyGuard, 10_000L)
+        // Start server FIRST, then load from http://
+        fileServer.start()
+        Log.i(TAG, "Server started on port ${fileServer.port}")
+        loadUrl(fileServer.rootUrl)
+        mainHandler.postDelayed(readyGuard, 12_000L)
     }
 
     // ── JS → Kotlin bridge ────────────────────────────────────────────────────
 
-    inner class AndroidBridge {
-        @JavascriptInterface
-        fun onRendererReady() {
-            Log.i(TAG, "onRendererReady from JS")
-            listener?.onDebugMessage("✅ Renderer READY")
-            post { markReady() }
-        }
-
-        @JavascriptInterface
-        fun onModelLoaded(name: String) {
-            Log.i(TAG, "onModelLoaded: $name")
-            listener?.onDebugMessage("✅ Model: $name")
-            post { listener?.onModelLoaded(name) }
-        }
-
-        @JavascriptInterface
-        fun onModelError(error: String) {
-            Log.e(TAG, "onModelError: $error")
-            listener?.onDebugMessage("❌ $error")
-            post { listener?.onModelError(error) }
-        }
-
-        @JavascriptInterface
-        fun onDebugMessage(msg: String) {
-            Log.d(TAG, "JS debug: $msg")
-            post { listener?.onDebugMessage(msg) }
-        }
+    inner class Bridge {
+        @JavascriptInterface fun onRendererReady()           { Log.i(TAG, "onRendererReady"); post { markReady() } }
+        @JavascriptInterface fun onModelLoaded(name: String) { Log.i(TAG, "onModelLoaded: $name"); post { listener?.onModelLoaded(name) } }
+        @JavascriptInterface fun onModelError(error: String) { Log.e(TAG, "onModelError: $error"); listener?.onDebugMessage("❌ $error"); post { listener?.onModelError(error) } }
+        @JavascriptInterface fun onDebugMessage(msg: String) { Log.d(TAG, "JS: $msg"); post { listener?.onDebugMessage(msg) } }
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    /**
-     * Load a model from a file path.
-     * Starts a local HTTP server so WebView fetches it over http://127.0.0.1
-     * instead of encoding it as a potentially-huge base64 data URI.
-     */
     fun loadModelFromPath(path: String) {
         val file = File(path)
         if (!file.exists() || !file.canRead()) {
-            val err = "File not found or unreadable: $path"
+            val err = "File not found: $path"
             Log.e(TAG, err)
-            listener?.onDebugMessage("❌ $err")
             listener?.onModelError(err)
             return
         }
-
         Log.i(TAG, "loadModelFromPath: ${file.name} (${file.length() / 1024} KB)")
-        listener?.onDebugMessage("📦 ${file.name} (${file.length() / 1024} KB)")
+        fileServer.setModelFile(file)
 
-        // Stop any previous server
-        fileServer?.stop()
-
-        val server = LocalFileServer(file)
-        server.start()
-        fileServer = server
-
-        val url = server.url
-        Log.i(TAG, "Serving model at $url")
-        listener?.onDebugMessage("🌐 Serving on port ${server.port}")
-
-        dispatchModelUrl(url)
+        if (rendererReady) {
+            Log.d(TAG, "Renderer ready — loading now")
+            js("AvatarAPI.loadModel('/model');")
+        } else {
+            Log.d(TAG, "Renderer not ready — queuing")
+            pendingModelPath = path
+        }
     }
 
-    /**
-     * Load a model from a content:// URI.
-     * Copies to cache first, then hands off to [loadModelFromPath].
-     */
     fun loadModelFromUri(uri: Uri) {
         Log.i(TAG, "loadModelFromUri: $uri")
-        listener?.onDebugMessage("📦 Copying from URI…")
         Thread {
             try {
-                val ext = when {
-                    uri.path?.endsWith(".gltf", true) == true -> ".gltf"
-                    else -> ".glb"
-                }
+                val ext  = if (uri.path?.endsWith(".gltf", true) == true) ".gltf" else ".glb"
                 val dest = File(context.cacheDir, "avatar_tmp$ext")
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    dest.outputStream().use { input.copyTo(it) }
-                } ?: run {
-                    post {
-                        listener?.onModelError("Cannot open URI: $uri")
-                        listener?.onDebugMessage("❌ Cannot open URI")
-                    }
-                    return@Thread
-                }
-                Log.d(TAG, "Copied URI to ${dest.absolutePath} (${dest.length()} bytes)")
+                context.contentResolver.openInputStream(uri)?.use { it.copyTo(dest.outputStream()) }
+                    ?: run { post { listener?.onModelError("Cannot open URI") }; return@Thread }
                 post { loadModelFromPath(dest.absolutePath) }
             } catch (e: Exception) {
                 Log.e(TAG, "loadModelFromUri failed", e)
-                post {
-                    listener?.onModelError(e.message ?: "URI copy error")
-                    listener?.onDebugMessage("❌ URI error: ${e.message}")
-                }
+                post { listener?.onModelError(e.message ?: "URI error") }
             }
-        }.start()
+        }.also { it.isDaemon = true }.start()
     }
 
-    fun playExpression(emotion: PetEmotion) {
-        evaluateJavascript(
-            "AvatarAPI.playExpression('${emotion.vrmExpression}',${emotion.weight},${emotion.durationSec});",
-            null
-        )
-    }
+    fun playExpression(emotion: PetEmotion) =
+        js("AvatarAPI.playExpression('${emotion.vrmExpression}',${emotion.weight},${emotion.durationSec});")
 
-    fun resetExpression() {
-        evaluateJavascript("AvatarAPI.resetExpression();", null)
-    }
-
-    fun lookAt(x: Float, y: Float) {
-        evaluateJavascript("AvatarAPI.lookAt($x,$y);", null)
-    }
-
-    fun setFraming(mode: String) {
-        evaluateJavascript("AvatarAPI.setFraming('$mode');", null)
-    }
+    fun resetExpression() = js("AvatarAPI.resetExpression();")
+    fun setThinking()     = js("AvatarAPI.setThinking();")
+    fun setSpeaking()     = js("AvatarAPI.setSpeaking();")
+    fun setIdle()         = js("AvatarAPI.setIdle();")
+    fun lookAt(x: Float, y: Float) = js("AvatarAPI.lookAt($x,$y);")
+    fun setFraming(mode: String)   = js("AvatarAPI.setFraming('$mode');")
 
     override fun destroy() {
         mainHandler.removeCallbacks(readyGuard)
-        fileServer?.stop()
-        fileServer = null
+        fileServer.stop()
         super.destroy()
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
+    // ── Internal ──────────────────────────────────────────────────────────────
+
+    private fun js(script: String) = evaluateJavascript(script, null)
 
     private fun markReady() {
         mainHandler.removeCallbacks(readyGuard)
         if (rendererReady) return
         rendererReady = true
-        Log.i(TAG, "Marked READY")
+        Log.i(TAG, "Renderer marked READY")
         listener?.onRendererReady()
-        pendingModelUrl?.let { url ->
-            pendingModelUrl = null
-            Log.d(TAG, "Delivering queued model URL")
-            evaluateJavascript("AvatarAPI.loadModel('$url');", null)
-        }
-    }
-
-    private fun dispatchModelUrl(url: String) {
-        if (rendererReady) {
-            Log.d(TAG, "Dispatching model URL immediately: $url")
-            evaluateJavascript("AvatarAPI.loadModel('$url');", null)
-        } else {
-            Log.d(TAG, "Renderer not ready — queuing model URL")
-            listener?.onDebugMessage("⏳ Queued (waiting for JS)")
-            pendingModelUrl = url
+        pendingModelPath?.let { path ->
+            pendingModelPath = null
+            Log.d(TAG, "Delivering queued model")
+            fileServer.setModelFile(File(path))
+            js("AvatarAPI.loadModel('/model');")
         }
     }
 }
