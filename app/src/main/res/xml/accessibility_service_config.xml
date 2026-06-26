@@ -1,13 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    feedbackGeneric = we are NOT a screen reader/TTS service.
-    Using feedbackSpoken caused Android to classify this as a screen reader,
-    which shows misleading UI and can restrict the service on some OEMs.
--->
-<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeViewTextChanged|typeAnnouncement"
-    android:accessibilityFlags="flagDefault"
+<accessibility-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeViewFocused|typeNotificationStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:description="@string/accessibility_description"
-    android:notificationTimeout="100"
-    android:canRetrieveWindowContent="true" />
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_label"
+    android:notificationTimeout="100" />
