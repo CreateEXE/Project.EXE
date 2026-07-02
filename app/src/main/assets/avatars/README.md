@@ -1,0 +1,1 @@
+# Avatar Assets Directory
