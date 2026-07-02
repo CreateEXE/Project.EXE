@@ -1,10 +1,12 @@
 package com.android.exe.render
 
+import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class AnimationBridge {
     companion object {
+        private const val TAG = "AnimationBridge"
         private const val MAX_BONES = 256
         private const val MAX_BLENDSHAPES = 128
         private const val MATRIX_SIZE = 16
